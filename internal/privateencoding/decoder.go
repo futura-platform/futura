@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strconv"
+
+	"github.com/vmihailenco/msgpack/v5"
 
 	privateencodinginternal "github.com/futura-platform/futura/internal/privateencoding/internal"
 )
@@ -17,134 +20,61 @@ type Decoder[T any] struct {
 	interfaceDecoder interface {
 		DecodeValue(v reflect.Value) error
 	}
+	// msgpackDecoder is used as a fast path for primitive leaf values
+	// (ints, floats, bools, strings, []byte) at any depth.
+	msgpackDecoder *msgpack.Decoder
 }
 
 func NewDecoder[T any](r io.Reader) *Decoder[T] {
-	return &Decoder[T]{r: r, interfaceDecoder: gob.NewDecoder(r)}
+	return &Decoder[T]{
+		r:                r,
+		interfaceDecoder: gob.NewDecoder(r),
+		msgpackDecoder:   msgpack.NewDecoder(r),
+	}
 }
 
 func (d *Decoder[T]) Decode() (T, error) {
-	v := new(T)
-	return *v, d.decodeValue(reflect.ValueOf(v).Elem(), "root")
+	var v T
+	err := d.decodeValue(reflect.ValueOf(&v).Elem(), "root")
+	return v, err
 }
 
-func decodeSimple(r io.Reader, v any) (error, bool) {
-	readBytes := func() ([]byte, error) {
-		sizeBuf := make([]byte, 8)
-		_, err := r.Read(sizeBuf)
-		if err != nil {
-			return nil, err
-		}
-		size := endianness().Uint64(sizeBuf)
-		if size == 0 {
-			return []byte{}, nil
-		}
-		buf := make([]byte, size)
-		_, err = r.Read(buf)
-		return buf, err
-	}
-
-	// first check primitive types that don't have a fixed size
-	switch original := v.(type) {
-	case *[]byte:
-		isNil, err := readSimple[bool](r)
-		if err != nil {
-			return err, false
-		} else if isNil {
-			*original = nil
-			return nil, true
-		}
-
-		bytes, err := readBytes()
-		if err != nil {
-			return err, false
-		}
-		*original = bytes
-		return nil, true
-	case *string:
-		bytes, err := readBytes()
-		if err != nil {
-			return err, false
-		}
-		*original = string(bytes)
-		return nil, true
-
-	case *int:
-		v = new(int64)
-		defer func() {
-			if original == nil {
-				fmt.Println("original is nil")
-			}
-			*original = int(*(v.(*int64)))
-		}()
-	case *uint:
-		v = new(uint64)
-		defer func() {
-			*original = uint(*(v.(*uint64)))
-		}()
-	}
-
-	var size int
+// decodeSimple attempts to decode primitive leaf values using msgpack at any depth.
+func (d *Decoder[T]) decodeSimple(v any) (error, bool) {
 	switch v.(type) {
-	case *int64, *uint64, *float64:
-		size = 8
-	case *int32, *uint32, *float32:
-		size = 4
-	case *int16, *uint16:
-		size = 2
-	case *int8, *uint8, *bool:
-		size = 1
+	case *[]byte,
+		*string,
+		*bool,
+		*int, *int8, *int16, *int32, *int64,
+		*uint, *uint8, *uint16, *uint32, *uint64,
+		*float32, *float64:
+		return d.msgpackDecoder.Decode(v), true
 	default:
 		return nil, false
 	}
-	buf := make([]byte, size)
-	_, err := r.Read(buf)
-	if err != nil {
-		return err, false
-	}
-	_, err = binary.Decode(buf, endianness(), v)
-	if err != nil {
-		return err, false
-	}
-	return nil, true
 }
 
-func readSimple[T any](r io.Reader) (T, error) {
-	var v T
-	err := mustDecodeSimple(r, &v)
-	if err != nil {
-		return v, err
-	}
-	return v, nil
-}
-
-func mustDecodeSimple(r io.Reader, v any) error {
-	err, isSimple := decodeSimple(r, v)
+func (d *Decoder[T]) mustDecodeSimple(v any) error {
+	err, isSimple := d.decodeSimple(v)
 	if err != nil {
 		return err
 	} else if !isSimple {
-		panic(fmt.Sprintf("type is not simple: %T", v))
+		panic("type is not simple: " + reflect.TypeOf(v).String())
 	}
 	return nil
-}
-
-func mustDecodeSimpleValue[T any](r io.Reader, v reflect.Value) error {
-	vv := new(T)
-	err := mustDecodeSimple(r, vv)
-
-	rv := reflect.ValueOf(*vv)
-	v.Set(rv.Convert(v.Type()))
-	return err
 }
 
 func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 	uv := privateencodinginternal.UnsafeValue(v)
 	if uv.Kind() == reflect.Interface {
-		return decodePathError(path, d.interfaceDecoder.DecodeValue(uv))
+		if err := d.interfaceDecoder.DecodeValue(uv); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	}
 
-	// first try to decode through the fast binary decoder
-	err, isSimple := decodeSimple(d.r, uv.Addr().Interface())
+	// first try to decode through the fast primitive decoder
+	err, isSimple := d.decodeSimple(uv.Addr().Interface())
 	if err != nil {
 		return decodePathError(path, err)
 	} else if isSimple {
@@ -156,43 +86,46 @@ func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 }
 
 func (d *Decoder[T]) decodeNillable(v reflect.Value, path string, decode func() error) error {
-	isNil, err := readSimple[bool](d.r)
-	if err != nil {
+	var isNil bool
+	if err := d.mustDecodeSimple(&isNil); err != nil {
 		return decodePathError(fmt.Sprintf("%s == nil", path), err)
-	} else if isNil {
+	}
+	if isNil {
 		v.Set(reflect.Zero(v.Type()))
 		return nil
 	}
-
 	return decode()
 }
 
-func (d *Decoder[T]) decodeComplex(v reflect.Value, path string) error {
-	if !v.CanAddr() {
-		panic(fmt.Sprintf("not addressable: %s", v.Type()))
+func mustDecodeSimpleValue[T, D any](d *Decoder[D], v reflect.Value) error {
+	var tmp T
+	if err := d.mustDecodeSimple(&tmp); err != nil {
+		return err
 	}
+	v.Set(reflect.ValueOf(tmp).Convert(v.Type()))
+	return nil
+}
+
+func (d *Decoder[T]) decodeComplex(v reflect.Value, path string) error {
 	switch v.Kind() {
 	case reflect.Pointer:
 		return d.decodeNillable(v, path, func() error {
-			if path == "root.Direct.loc" {
-				fmt.Println("debug")
-			}
 			newValue := reflect.New(v.Type().Elem())
 			v.Set(newValue)
 			return d.decodeValue(
 				newValue.Elem(),
-				fmt.Sprintf("(*%s)", path),
+				"(*"+path+")",
 			)
 		})
 	case reflect.Slice:
 		return d.decodeNillable(v, path, func() error {
-			len, err := readSimple[int](d.r)
-			if err != nil {
-				return decodePathError(fmt.Sprintf("len(%s)", path), err)
+			var l int
+			if err := d.mustDecodeSimple(&l); err != nil {
+				return decodePathError("len("+path+")", err)
 			}
-			v.Set(reflect.MakeSlice(v.Type(), len, len))
-			for i := range len {
-				err := d.decodeValue(v.Index(i), fmt.Sprintf("%s[%d]", path, i))
+			v.Set(reflect.MakeSlice(v.Type(), l, l))
+			for i := range l {
+				err := d.decodeValue(v.Index(i), path+"["+strconv.Itoa(i)+"]")
 				if err != nil {
 					return err
 				}
@@ -201,22 +134,22 @@ func (d *Decoder[T]) decodeComplex(v reflect.Value, path string) error {
 		})
 	case reflect.Map:
 		return d.decodeNillable(v, path, func() error {
-			len, err := readSimple[int](d.r)
-			if err != nil {
-				return decodePathError(fmt.Sprintf("len(%s)", path), err)
+			var l int
+			if err := d.mustDecodeSimple(&l); err != nil {
+				return decodePathError("len("+path+")", err)
 			}
-			v.Set(reflect.MakeMapWithSize(v.Type(), len))
-			for i := range len {
+			v.Set(reflect.MakeMapWithSize(v.Type(), l))
+			for i := range l {
 				key := reflect.New(v.Type().Key()).Elem()
 				err := d.decodeValue(
 					key,
-					fmt.Sprintf("%s[key-%d]", path, i),
+					path+"[key-"+strconv.Itoa(i)+"]",
 				)
 				if err != nil {
 					return err
 				}
 				value := reflect.New(v.Type().Elem()).Elem()
-				err = d.decodeValue(value, fmt.Sprintf("%s[%s]", path, key.String()))
+				err = d.decodeValue(value, path+"["+key.String()+"]")
 				if err != nil {
 					return err
 				}
@@ -231,7 +164,7 @@ func (d *Decoder[T]) decodeComplex(v reflect.Value, path string) error {
 			if !field.IsExported() {
 				fv = privateencodinginternal.UnsafeValue(fv)
 			}
-			err := d.decodeValue(fv, fmt.Sprintf("%s.%s", path, field.Name))
+			err := d.decodeValue(fv, path+"."+field.Name)
 			if err != nil {
 				return err
 			}
@@ -240,51 +173,93 @@ func (d *Decoder[T]) decodeComplex(v reflect.Value, path string) error {
 
 	// handle cases where simple types are aliased, which makes them complex
 	case reflect.String:
-		return decodePathError(path, mustDecodeSimpleValue[string](d.r, v))
+		return mustDecodeSimpleValue[string](d, v)
 	case reflect.Bool:
-		return decodePathError(path, mustDecodeSimpleValue[bool](d.r, v))
+		if err := mustDecodeSimpleValue[bool](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Int:
-		return decodePathError(path, mustDecodeSimpleValue[int64](d.r, v))
+		if err := mustDecodeSimpleValue[int64](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Uint:
-		return decodePathError(path, mustDecodeSimpleValue[uint64](d.r, v))
+		if err := mustDecodeSimpleValue[uint64](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Int8:
-		return decodePathError(path, mustDecodeSimpleValue[int8](d.r, v))
+		if err := mustDecodeSimpleValue[int8](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Uint8:
-		return decodePathError(path, mustDecodeSimpleValue[uint8](d.r, v))
+		if err := mustDecodeSimpleValue[uint8](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Int16:
-		return decodePathError(path, mustDecodeSimpleValue[int16](d.r, v))
+		if err := mustDecodeSimpleValue[int16](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Uint16:
-		return decodePathError(path, mustDecodeSimpleValue[uint16](d.r, v))
+		if err := mustDecodeSimpleValue[uint16](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Int32:
-		return decodePathError(path, mustDecodeSimpleValue[int32](d.r, v))
+		if err := mustDecodeSimpleValue[int32](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Uint32:
-		return decodePathError(path, mustDecodeSimpleValue[uint32](d.r, v))
+		if err := mustDecodeSimpleValue[uint32](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Int64:
-		return decodePathError(path, mustDecodeSimpleValue[int64](d.r, v))
+		if err := mustDecodeSimpleValue[int64](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Uint64:
-		return decodePathError(path, mustDecodeSimpleValue[uint64](d.r, v))
+		if err := mustDecodeSimpleValue[uint64](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Float32:
-		return decodePathError(path, mustDecodeSimpleValue[float32](d.r, v))
+		if err := mustDecodeSimpleValue[float32](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Float64:
-		return decodePathError(path, mustDecodeSimpleValue[float64](d.r, v))
+		if err := mustDecodeSimpleValue[float64](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Complex64, reflect.Complex128:
-		buf := make([]byte, v.Type().Size())
-		_, err := d.r.Read(buf)
+		var buf [16]byte
+		size := int(v.Type().Size())
+		if _, err := io.ReadFull(d.r, buf[:size]); err != nil {
+			return decodePathError(path, err)
+		}
+		_, err := binary.Decode(buf[:size], endianness(), v.Addr().Interface())
 		if err != nil {
 			return decodePathError(path, err)
 		}
-		_, err = binary.Decode(buf, endianness(), v.Addr().Interface())
-		return decodePathError(path, err)
+		return nil
 	case reflect.Uintptr:
-		return decodePathError(path, mustDecodeSimpleValue[uint64](d.r, v))
+		if err := mustDecodeSimpleValue[uint64](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported type: %s", v.Kind())
 	}
 }
 
 func decodePathError(path string, err error) error {
-	if err == nil {
-		return nil
-	}
 	return pathError("decode", path, err)
 }

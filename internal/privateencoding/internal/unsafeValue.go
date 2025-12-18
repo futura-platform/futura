@@ -1,7 +1,6 @@
 package privateencodinginternal
 
 import (
-	"fmt"
 	"reflect"
 	"unsafe"
 )
@@ -10,12 +9,6 @@ import (
 // so that even if it is unexported, it can be used as if it was.
 // However, if it is exported, it will simply return the original value.
 func UnsafeValue(v reflect.Value) reflect.Value {
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Println("panic in UnsafeValue", r)
-			panic(r)
-		}
-	}()
 	if v.CanInterface() {
 		return v
 	} else if !v.CanAddr() {

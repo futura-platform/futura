@@ -24,6 +24,33 @@ func benchmarkEncodeDecode[T any](b *testing.B, value T) {
 	}
 }
 
+func benchmarkEncodeOnly[T any](b *testing.B, value T) {
+	var buf bytes.Buffer
+	enc := privateencoding.NewEncoder[T](&buf)
+	b.ResetTimer()
+	for b.Loop() {
+		buf.Reset()
+		err := enc.Encode(value)
+		assert.NoError(b, err)
+	}
+}
+
+func benchmarkDecodeOnly[T any](b *testing.B, value T) {
+	var buf bytes.Buffer
+	enc := privateencoding.NewEncoder[T](&buf)
+	err := enc.Encode(value)
+	assert.NoError(b, err)
+
+	dec := privateencoding.NewDecoder[T](&buf)
+	b.ResetTimer()
+	for b.Loop() {
+		// Re-create decoder each time so Decode always sees the same data.
+		dec = privateencoding.NewDecoder[T](bytes.NewReader(buf.Bytes()))
+		_, err := dec.Decode()
+		assert.NoError(b, err)
+	}
+}
+
 func BenchmarkEncodeDecodeBool(b *testing.B) {
 	benchmarkEncodeDecode(b, true)
 }
@@ -126,4 +153,44 @@ func BenchmarkCustomEncoderDecoder(b *testing.B) {
 
 func BenchmarkEncodeDecodeTime(b *testing.B) {
 	benchmarkEncodeDecode(b, time.Now())
+}
+
+// Focused encode/decode benchmarks for complex types
+
+func BenchmarkEncodeOnlyStruct(b *testing.B) {
+	value := struct {
+		Int    int
+		String string
+		Nested struct {
+			Int    int
+			String string
+		}
+	}{1, "test", struct {
+		Int    int
+		String string
+	}{1, "test"}}
+	benchmarkEncodeOnly(b, value)
+}
+
+func BenchmarkDecodeOnlyStruct(b *testing.B) {
+	value := struct {
+		Int    int
+		String string
+		Nested struct {
+			Int    int
+			String string
+		}
+	}{1, "test", struct {
+		Int    int
+		String string
+	}{1, "test"}}
+	benchmarkDecodeOnly(b, value)
+}
+
+func BenchmarkEncodeOnlyTime(b *testing.B) {
+	benchmarkEncodeOnly(b, time.Now())
+}
+
+func BenchmarkDecodeOnlyTime(b *testing.B) {
+	benchmarkDecodeOnly(b, time.Now())
 }
