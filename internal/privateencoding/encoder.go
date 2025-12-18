@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sync"
+	"time"
 
 	privateencodinginternal "github.com/futura-platform/futura/internal/privateencoding/internal"
 )
@@ -25,11 +27,14 @@ func NewEncoder[T any](w io.Writer) *Encoder[T] {
 
 type Kind byte
 
+var localTimeSync = sync.Once{}
+
 func (e *Encoder[T]) Encode(data T) error {
-	return e.encodeValue(
-		// get the address of the data and then the element of the pointer
-		// so that it is addressable and we can access the unexported fields
-		reflect.ValueOf(&data).Elem(), "root")
+	// the time package loads the local timezone lazily by assigning the time.Local poiner
+	// which can cause serialized time.Now() values to be inconsistent between calls,
+	// so we will force it to load the local timezone once here
+	localTimeSync.Do(func() { time.Local.String() })
+	return e.encodeValue(reflect.ValueOf(&data).Elem(), "root")
 }
 
 func (e *Encoder[T]) encodeSimple(data any) (err error, isSimple bool) {
@@ -41,6 +46,13 @@ func (e *Encoder[T]) encodeSimple(data any) (err error, isSimple bool) {
 	// first check primitive types that don't have a fixed size
 	switch v := data.(type) {
 	case []byte:
+		// must handle nil case properly
+		isNil := v == nil
+		if err := e.mustEncodeSimple(isNil); err != nil {
+			return err, false
+		} else if isNil {
+			return nil, true
+		}
 		return writeBytes(v), true
 	case string:
 		return writeBytes([]byte(v)), true
@@ -54,17 +66,25 @@ func (e *Encoder[T]) encodeSimple(data any) (err error, isSimple bool) {
 	}
 
 	// first check if we can use encoding/binary's fast path for primitive types
-	intSize := intDataSize(data)
-	if intSize != 0 {
-		buf := make([]byte, intSize)
-		_, err := binary.Encode(buf, endianness(), data)
-		if err != nil {
-			return err, false
-		}
-		return e.write(buf), true
+	var size int
+	switch data.(type) {
+	case int64, uint64, float64:
+		size = 8
+	case int32, uint32, float32:
+		size = 4
+	case int16, uint16:
+		size = 2
+	case int8, uint8, bool:
+		size = 1
+	default:
+		return nil, false
 	}
-
-	return nil, false
+	buf := make([]byte, size)
+	_, err = binary.Encode(buf, endianness(), data)
+	if err != nil {
+		return err, false
+	}
+	return e.write(buf), true
 }
 
 func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
@@ -118,35 +138,65 @@ func encodeComplexNumber[T complex64 | complex128](w io.Writer, n T) error {
 	return err
 }
 
+func (e *Encoder[T]) encodeNillable(v reflect.Value, path string, encode func(v reflect.Value) error) error {
+	isNil := v.IsNil()
+	if err := e.mustEncodeSimple(isNil); err != nil {
+		return encodePathError(fmt.Sprintf("%s == nil", path), err)
+	} else if isNil {
+		return nil
+	}
+	return encode(v)
+}
+
 func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
+	if path == "(*root.Direct.loc).name" {
+		fmt.Println("debug")
+	}
 	switch v.Kind() {
 	case reflect.Pointer:
-		return e.encodeValue(v.Elem(), fmt.Sprintf("(*%s)", path))
+		return e.encodeNillable(v, path, func(v reflect.Value) error {
+			if path == "root.Direct.loc" {
+				fmt.Println("debug")
+			}
+			return e.encodeValue(
+				v.Elem(), fmt.Sprintf("(*%s)", path),
+			)
+		})
 	case reflect.Slice:
-		l := v.Len()
-		if err := e.mustEncodeSimple(l); err != nil {
-			return encodePathError(fmt.Sprintf("len(%s)", path), err)
-		}
-		for i := range l {
-			if err := e.encodeValue(v.Index(i), fmt.Sprintf("%s[%d]", path, i)); err != nil {
-				return err
+		return e.encodeNillable(v, path, func(v reflect.Value) error {
+			l := v.Len()
+			if err := e.mustEncodeSimple(l); err != nil {
+				return encodePathError(fmt.Sprintf("len(%s)", path), err)
 			}
-		}
-		return nil
+			for i := range l {
+				if err := e.encodeValue(v.Index(i), fmt.Sprintf("%s[%d]", path, i)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	case reflect.Map:
-		if err := e.mustEncodeSimple(v.Len()); err != nil {
-			return encodePathError(fmt.Sprintf("len(%s)", path), err)
-		}
-		i := 0
-		for iter := v.MapRange(); iter.Next(); i++ {
-			if err := e.encodeValue(iter.Key(), fmt.Sprintf("%s[key-%d]", path, i)); err != nil {
-				return err
+		return e.encodeNillable(v, path, func(v reflect.Value) error {
+			if err := e.mustEncodeSimple(v.Len()); err != nil {
+				return encodePathError(fmt.Sprintf("len(%s)", path), err)
 			}
-			if err := e.encodeValue(iter.Value(), fmt.Sprintf("%s[%v]", path, iter.Value().Interface())); err != nil {
-				return err
+			i := 0
+			for iter := v.MapRange(); iter.Next(); i++ {
+				iterKey := iter.Key()
+				addressableKey := reflect.New(iterKey.Type()).Elem()
+				addressableKey.Set(iterKey)
+				if err := e.encodeValue(addressableKey, fmt.Sprintf("%s[key-%d]", path, i)); err != nil {
+					return err
+				}
+				iterValue := iter.Value()
+				addressableValue := reflect.New(iterValue.Type()).Elem()
+				addressableValue.Set(iterValue)
+				if err := e.encodeValue(addressableValue, fmt.Sprintf("%s[%v]", path, iter.Value().Interface())); err != nil {
+					return err
+				}
 			}
-		}
-		return nil
+			return nil
+		})
 	case reflect.Struct:
 		for i := range v.NumField() {
 			fv := v.Field(i)

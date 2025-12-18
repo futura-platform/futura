@@ -1,10 +1,16 @@
-package privateencoding
+package privateencoding_test
 
 import (
 	"bytes"
+	"encoding/gob"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/futura-platform/futura/internal/privateencoding"
 	"github.com/futura-platform/futura/internal/privateencoding/internal/otherpackage"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/utils/diff"
@@ -15,11 +21,38 @@ type TestRun struct {
 	Value any
 }
 
+type unexportedComparable struct {
+	unexportedField int
+}
+
+type myInterface interface {
+	SomeMethod() string
+}
+type myImplementation struct {
+	SomeField string
+}
+
+func (s *myImplementation) SomeMethod() string {
+	return s.SomeField
+}
+
 func TestCodec(t *testing.T) {
-	t.Run("Primitive", codecTest(1))
+	// nil values
+	var nilPtr *int
+	t.Run("nil_pointer", codecTest(nilPtr))
+	var nilInterface any
+	t.Run("nil_interface", codecTest(nilInterface))
+	var nilMap map[string]any
+	t.Run("nil_map", codecTest(nilMap))
+	var nilSlice []any
+	t.Run("nil_slice", codecTest(nilSlice))
+	var nilBytes []byte
+	t.Run("nil_bytes", codecTest(nilBytes))
+	// string like
 	t.Run("[]byte", codecTest([]byte("Hello, 世界")))
 	t.Run("string", codecTest("Hello, 世界"))
 	t.Run("[]rune", codecTest([]rune("Hello, 世界")))
+	// complex types
 	t.Run("interface{}", codecTest(otherpackage.NewCodecTestStruct(any(1))))
 	a := 1
 	t.Run("Pointer", codecTest(otherpackage.NewCodecTestStruct(&a)))
@@ -145,6 +178,7 @@ func TestCodec(t *testing.T) {
 
 	// Map with various key types
 	t.Run("map_int_keys", codecTest(map[int]string{1: "one", 2: "two"}))
+	t.Run("map_unexported_comparable_keys", codecTest(map[unexportedComparable]int{{1}: 1}))
 
 	// Unexported fields (via otherpackage)
 	t.Run("unexported_fields", codecTest(otherpackage.NewMyStruct(10, 20)))
@@ -170,20 +204,46 @@ func TestCodec(t *testing.T) {
 	// Unicode edge cases
 	t.Run("unicode_emoji", codecTest("👋🌍🎉"))
 	t.Run("unicode_mixed", codecTest("Hello 世界 🌍 مرحبا"))
+
+	// interfaces with custom encoders/decoders
+	t.Run("custom_encoder_decoder", func(t *testing.T) {
+		var customEncoderDecoder myInterface = &myImplementation{SomeField: "test"}
+		gob.Register(&myImplementation{})
+		applyCodecThenCompare(t, customEncoderDecoder)
+	})
+
+	// misc standard library types
+	t.Run("time.Time", func(t *testing.T) {
+		time_ := time.Now()
+		codecTest(time_)(t)
+	})
+	t.Run("cookiejar.Jar", func(t *testing.T) {
+		cookieJar, err := cookiejar.New(nil)
+		assert.NoError(t, err)
+		cookieJar.SetCookies(
+			&url.URL{
+				Scheme: "https",
+				Host:   "example.com",
+			},
+			[]*http.Cookie{{Name: "test", Value: "test"}},
+		)
+		codecTest(cookieJar)(t)
+	})
 }
 
 func codecTest[T any](value T) func(t *testing.T) {
 	return func(t *testing.T) {
-		// first test the type by itself
-		applyCodecThenCompare(t, value)
-
-		// then test the type as a struct field on our testing struct to cover all the edge cases
-		testStruct := *otherpackage.NewCodecTestStruct(value)
-		applyCodecThenCompare(t, testStruct)
-
-		// then test the type as a type alias
-		type MyType = T
-		applyCodecThenCompare(t, MyType(value))
+		t.Run("direct", func(t *testing.T) {
+			applyCodecThenCompare(t, value)
+		})
+		t.Run("in_struct", func(t *testing.T) {
+			testStruct := *otherpackage.NewCodecTestStruct(value)
+			applyCodecThenCompare(t, testStruct)
+		})
+		t.Run("type_alias", func(t *testing.T) {
+			type MyType = T
+			applyCodecThenCompare(t, MyType(value))
+		})
 	}
 }
 
@@ -195,23 +255,16 @@ func applyCodecThenCompare[T any](t *testing.T, value T) {
 
 func applyCodec[T any](value T) (T, error) {
 	buf := bytes.NewBuffer(nil)
-	codec := NewEncoder[T](buf)
+	codec := privateencoding.NewEncoder[T](buf)
 	err := codec.Encode(value)
 	if err != nil {
 		return value, err
 	}
 
-	decoder := NewDecoder[T](bytes.NewReader(buf.Bytes()))
+	decoder := privateencoding.NewDecoder[T](buf)
 	decoded, err := decoder.Decode()
 	if err != nil {
 		return value, err
 	}
 	return decoded, nil
-}
-
-func BenchmarkCodec(b *testing.B) {
-	for b.Loop() {
-		_, err := applyCodec(1)
-		assert.NoError(b, err)
-	}
 }

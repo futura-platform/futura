@@ -47,6 +47,14 @@ func decodeSimple(r io.Reader, v any) (error, bool) {
 	// first check primitive types that don't have a fixed size
 	switch original := v.(type) {
 	case *[]byte:
+		isNil, err := readSimple[bool](r)
+		if err != nil {
+			return err, false
+		} else if isNil {
+			*original = nil
+			return nil, true
+		}
+
 		bytes, err := readBytes()
 		if err != nil {
 			return err, false
@@ -76,8 +84,17 @@ func decodeSimple(r io.Reader, v any) (error, bool) {
 		}()
 	}
 
-	size := intDataSize(v)
-	if size == 0 {
+	var size int
+	switch v.(type) {
+	case *int64, *uint64, *float64:
+		size = 8
+	case *int32, *uint32, *float32:
+		size = 4
+	case *int16, *uint16:
+		size = 2
+	case *int8, *uint8, *bool:
+		size = 1
+	default:
 		return nil, false
 	}
 	buf := make([]byte, size)
@@ -138,51 +155,75 @@ func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 	return d.decodeComplex(v, path)
 }
 
+func (d *Decoder[T]) decodeNillable(v reflect.Value, path string, decode func() error) error {
+	isNil, err := readSimple[bool](d.r)
+	if err != nil {
+		return decodePathError(fmt.Sprintf("%s == nil", path), err)
+	} else if isNil {
+		v.Set(reflect.Zero(v.Type()))
+		return nil
+	}
+
+	return decode()
+}
+
 func (d *Decoder[T]) decodeComplex(v reflect.Value, path string) error {
 	if !v.CanAddr() {
-		panic("value is not addressable")
+		panic(fmt.Sprintf("not addressable: %s", v.Type()))
 	}
 	switch v.Kind() {
 	case reflect.Pointer:
-		newValue := reflect.New(v.Type().Elem())
-		v.Set(newValue)
-		return d.decodeValue(newValue.Elem(), fmt.Sprintf("(*%s)", path))
-	case reflect.Slice:
-		len, err := readSimple[int](d.r)
-		if err != nil {
-			return decodePathError(fmt.Sprintf("len(%s)", path), err)
-		}
-		v.Set(reflect.MakeSlice(v.Type(), len, len))
-		for i := range len {
-			err := d.decodeValue(v.Index(i), fmt.Sprintf("%s[%d]", path, i))
-			if err != nil {
-				return err
+		return d.decodeNillable(v, path, func() error {
+			if path == "root.Direct.loc" {
+				fmt.Println("debug")
 			}
-		}
-		return nil
-	case reflect.Map:
-		len, err := readSimple[int](d.r)
-		if err != nil {
-			return decodePathError(fmt.Sprintf("len(%s)", path), err)
-		}
-		v.Set(reflect.MakeMapWithSize(v.Type(), len))
-		for i := range len {
-			key := reflect.New(v.Type().Key()).Elem()
-			err := d.decodeValue(
-				key,
-				fmt.Sprintf("%s[key-%d]", path, i),
+			newValue := reflect.New(v.Type().Elem())
+			v.Set(newValue)
+			return d.decodeValue(
+				newValue.Elem(),
+				fmt.Sprintf("(*%s)", path),
 			)
+		})
+	case reflect.Slice:
+		return d.decodeNillable(v, path, func() error {
+			len, err := readSimple[int](d.r)
 			if err != nil {
-				return err
+				return decodePathError(fmt.Sprintf("len(%s)", path), err)
 			}
-			value := reflect.New(v.Type().Elem()).Elem()
-			err = d.decodeValue(value, fmt.Sprintf("%s[%s]", path, key.String()))
+			v.Set(reflect.MakeSlice(v.Type(), len, len))
+			for i := range len {
+				err := d.decodeValue(v.Index(i), fmt.Sprintf("%s[%d]", path, i))
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	case reflect.Map:
+		return d.decodeNillable(v, path, func() error {
+			len, err := readSimple[int](d.r)
 			if err != nil {
-				return err
+				return decodePathError(fmt.Sprintf("len(%s)", path), err)
 			}
-			v.SetMapIndex(key, value)
-		}
-		return nil
+			v.Set(reflect.MakeMapWithSize(v.Type(), len))
+			for i := range len {
+				key := reflect.New(v.Type().Key()).Elem()
+				err := d.decodeValue(
+					key,
+					fmt.Sprintf("%s[key-%d]", path, i),
+				)
+				if err != nil {
+					return err
+				}
+				value := reflect.New(v.Type().Elem()).Elem()
+				err = d.decodeValue(value, fmt.Sprintf("%s[%s]", path, key.String()))
+				if err != nil {
+					return err
+				}
+				v.SetMapIndex(key, value)
+			}
+			return nil
+		})
 	case reflect.Struct:
 		for i := range v.NumField() {
 			field := v.Type().Field(i)
