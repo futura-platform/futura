@@ -5,3 +5,9 @@ type MomentFnMetadata struct {
 }
 
 type MomentFnOption func(*MomentFnMetadata)
+
+func WithLabel(label string) MomentFnOption {
+	return func(m *MomentFnMetadata) {
+		m.Label = label
+	}
+}

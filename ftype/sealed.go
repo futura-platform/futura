@@ -2,6 +2,7 @@ package ftype
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"unsafe"
 
@@ -9,7 +10,7 @@ import (
 )
 
 type Sealed[T any] interface {
-	V() *T
+	V() T
 }
 
 type sealedWithString[T any] struct {
@@ -30,22 +31,19 @@ func Seal[T any](value T) Sealed[T] {
 		panic(err)
 	}
 
-	return &sealedWithString[T]{
+	return sealedWithString[T]{
 		comparableSerialized: buf.String(),
 	}
 }
 
-// V returns a pointer to the underlying value of the sealed value.
+// V returns the underlying value of the sealed value.
 // The return value is guaranteed to have the same shape
 // as the input value, but it is not guaranteed to have the same pointers.
-// This value should be treated as a copy of the input value.
-// This value should be treated as immutable. If it is mutated within a Step,
-// The Step will panic (if running in debug mode).
-func (s *sealedWithString[T]) V() *T {
+func (s sealedWithString[T]) V() T {
 	dec := privateencoding.NewDecoder[T](strings.NewReader(s.comparableSerialized))
 	value, err := dec.Decode()
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("failed to decode sealed value: %w", err))
 	}
-	return &value
+	return value
 }
