@@ -4,12 +4,26 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"testing"
 
+	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
+var thisFile string
+
+func init() {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("failed to get caller")
+	}
+	thisFile = file
+}
+
 func TestGetClosestReplayExecutionFrame(t *testing.T) {
+	assert.Equal(t, filepath.Base(thisFile), "getClosestReplayUserCallpath_test.go")
 	t.Run("returns the closest replay execution callsite frame", func(t *testing.T) {
 		t.Run("single parent, direct child", func(t *testing.T) {
 			Execute(t.Context(), func(ctx context.Context, args any) (any, error) {
@@ -17,8 +31,8 @@ func TestGetClosestReplayExecutionFrame(t *testing.T) {
 					callpath, ok := GetClosestReplayUserCallpath(0)
 					assert.True(t, ok)
 					assert.Len(t, callpath, 1)
-					assert.Equal(t, filepath.Base(callpath[0].File), "getClosestReplayUserCallpath_test.go")
-					assert.Equal(t, callpath[0].Line, 22)
+					assert.Equal(t, callpath[0].File, thisFile)
+					assert.Equal(t, callpath[0].Line, 36)
 				}()
 				return nil, nil
 			}, nil)
@@ -37,8 +51,8 @@ func TestGetClosestReplayExecutionFrame(t *testing.T) {
 						callpath, ok := GetClosestReplayUserCallpath(0)
 						assert.True(t, ok)
 						assert.Len(t, callpath, recurses)
-						assert.Equal(t, filepath.Base(callpath[0].File), "getClosestReplayUserCallpath_test.go")
-						assert.Equal(t, callpath[0].Line, 43)
+						assert.Equal(t, callpath[0].File, thisFile)
+						assert.Equal(t, callpath[0].Line, 57)
 					}
 					indirect()
 					return nil, nil
@@ -56,8 +70,8 @@ func TestGetClosestReplayExecutionFrame(t *testing.T) {
 							callpath, ok := GetClosestReplayUserCallpath(0)
 							assert.True(t, ok)
 							assert.Len(t, callpath, 1)
-							assert.Equal(t, filepath.Base(callpath[0].File), "getClosestReplayUserCallpath_test.go")
-							assert.Equal(t, callpath[0].Line, 61)
+							assert.Equal(t, callpath[0].File, thisFile)
+							assert.Equal(t, callpath[0].Line, 75)
 						}()
 						return nil, nil
 					}, nil)
@@ -65,23 +79,27 @@ func TestGetClosestReplayExecutionFrame(t *testing.T) {
 			}, nil)
 		})
 	})
-	t.Run("multiple layers of user abstraction between the replay execution callsite and the GetClosestReplayUserCallpath call", func(t *testing.T) {
+	t.Run("multiple layers of user abstraction between the replay execution callsite and the GetClosestReplayUserCallpath call, including a futura frame", func(t *testing.T) {
 		someUserAbstractionA := func() {
 			callpath, ok := GetClosestReplayUserCallpath(0)
 			assert.True(t, ok)
-			assert.Len(t, callpath, 3)
+			assert.Equal(t, moment.Callpath{
+				{File: thisFile, Line: 102},
+				{File: thisFile, Line: 98},
+				{File: thisFile, Line: 94},
+			}, callpath)
 		}
 
 		someUserAbstractionB := func() {
-			someUserAbstractionA()
+			testutil.TransparentCall(someUserAbstractionA)
 		}
 
 		someUserAbstractionC := func() {
-			someUserAbstractionB()
+			testutil.TransparentCall(someUserAbstractionB)
 		}
 
 		Execute(t.Context(), func(ctx context.Context, args any) (any, error) {
-			someUserAbstractionC()
+			testutil.TransparentCall(someUserAbstractionC)
 			return nil, nil
 		}, nil)
 	})

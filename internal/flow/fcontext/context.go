@@ -145,6 +145,12 @@ func (f *flowContext) RecordCurrentMoment(identity moment.Identity, currentMomen
 			sequenceLength: len(f.callOrder),
 		}))
 	} else if f.sequenceIndex == len(f.callOrder) {
+		_, ok := f.stateCache[identity]
+		if ok {
+			panic(ftrerrors.InconsistentStateError(UnexpectedCachedStateError{
+				identity: identity,
+			}))
+		}
 		f.callOrder = append(f.callOrder, identity)
 	} else {
 		f.callOrder[f.sequenceIndex] = identity
@@ -171,10 +177,12 @@ func FromContext(ctx context.Context) (*flowContext, bool) {
 	return v, ok
 }
 
+var ErrFlowContextNotFound = errors.New("flowContext not found in context")
+
 func MustFromContext(ctx context.Context) *flowContext {
 	f, ok := FromContext(ctx)
 	if !ok {
-		panic("flowContext not found in context")
+		panic(ErrFlowContextNotFound)
 	}
 	return f
 }
@@ -186,6 +194,14 @@ type SequenceIndexOutOfBoundsError struct {
 
 func (e SequenceIndexOutOfBoundsError) Error() string {
 	return fmt.Sprintf("sequenceIndex is greater than the length of the memoized moment sequence: %d > %d", e.sequenceIndex, e.sequenceLength)
+}
+
+type UnexpectedCachedStateError struct {
+	identity moment.Identity
+}
+
+func (e UnexpectedCachedStateError) Error() string {
+	return fmt.Sprintf("identity '%s' exists in the state cache, but was not expected to be present", e.identity.String())
 }
 
 type FlowContextUsedInWrongGoroutineError struct {

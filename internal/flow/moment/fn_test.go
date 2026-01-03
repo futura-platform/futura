@@ -31,7 +31,16 @@ func TestFnOptions(t *testing.T) {
 	t.Run("applies from first to last", func(t *testing.T) {
 		label1 := "label1"
 		label2 := "label2"
-		fn := NewFn(labelToInfer, ftype.WithLabel(label1), ftype.WithLabel(label2))
+		opts := []ftype.MomentFnOption{ftype.WithLabel(label1), ftype.WithLabel(label2)}
+		fn := NewFn(labelToInfer, opts...)
 		assert.Equal(t, label2, fn.Label())
+		assert.Equal(t, opts, fn.Options())
 	})
+}
+
+func TestFnCall(t *testing.T) {
+	fn := NewFn(func(ctx context.Context, args string) (string, error) { return args, nil })
+	r, err := fn.Call(context.Background(), "test")
+	assert.NoError(t, err)
+	assert.Equal(t, "test", r)
 }

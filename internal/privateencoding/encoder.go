@@ -2,6 +2,7 @@ package privateencoding
 
 import (
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -135,6 +136,8 @@ func (e *Encoder[T]) encodeNillable(v reflect.Value, path string, encode func(v 
 	return encode(v)
 }
 
+var ErrUnsupportedType = errors.New("unsupported type")
+
 func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
 	switch v.Kind() {
 	case reflect.Pointer:
@@ -227,11 +230,6 @@ func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
 	case reflect.Uintptr:
 		return encodePathError(path, e.mustEncodeSimple(uintptr(v.Uint())))
 	default:
-		return fmt.Errorf("unsupported type: %s", v.Kind())
+		return fmt.Errorf("%w: %s", ErrUnsupportedType, v.Kind())
 	}
-}
-
-func (e *Encoder[T]) write(value []byte) error {
-	_, err := e.w.Write(value)
-	return err
 }

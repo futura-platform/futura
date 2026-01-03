@@ -15,7 +15,7 @@ import (
 
 func TestFlow(t *testing.T) {
 	t.Run("do not call Flow from within a flow", func(t *testing.T) {
-		ctx := fcontext.WithFlow(context.Background(), nil)
+		ctx := fcontext.WithFlow(t.Context(), nil)
 		_, err := futura.Flow(ctx, func(b futura.FlowBuilder, _ *any) (string, error) {
 			futura.Flow(b, func(b futura.FlowBuilder, _ *any) (string, error) {
 				return "never reached 1", nil
@@ -26,14 +26,14 @@ func TestFlow(t *testing.T) {
 	})
 	t.Run("Flow recovers from panics", func(t *testing.T) {
 		var expectedErr = errors.New("expected panic")
-		_, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		_, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic(expectedErr)
 		}, nil)
 		assert.ErrorIs(t, err, futura.ErrFlowPanic)
 		assert.ErrorIs(t, err, expectedErr)
 	})
 	t.Run("Flow recovers from panics with non-error values", func(t *testing.T) {
-		_, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		_, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic("not an error type")
 		}, nil)
 		assert.ErrorIs(t, err, futura.ErrFlowPanic)
@@ -48,7 +48,7 @@ func TestFlow(t *testing.T) {
 	}
 	checkMultipleMomentFunctions := func(t *testing.T, onUseFn1 func(futura.FlowBuilder) futura.FlowBuilder, onUseFn2 func(futura.FlowBuilder) futura.FlowBuilder) (string, error) {
 		replayCount := 0
-		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			var vfn futura.ComparableMoment[*any, string]
 			if replayCount == 0 {
 				vfn = fn1
@@ -73,7 +73,7 @@ func TestFlow(t *testing.T) {
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
 		assert.ErrorIs(t, err, moment.MomentFnChangeError{
 			Index:          0,
-			Identity:       moment.NewIdentity(context.Background(), []moment.Callsite{{File: file, Line: 65}}),
+			Identity:       moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 65}}),
 			OldMomentFnRef: moment.NewFn(fn1),
 			NewMomentFnRef: moment.NewFn(fn2),
 		})
@@ -94,7 +94,7 @@ func TestFlow(t *testing.T) {
 			execCount++
 			return nil
 		}
-		_, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		_, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			for i := range expectedExecCount {
 				b = b.WithKey(i)
 				err := futura.Effect(b, fn, nil)

@@ -16,7 +16,7 @@ import (
 
 func TestLoopFlow(t *testing.T) {
 	t.Run("Basic flow", func(t *testing.T) {
-		ctx := fcontext.WithFlow(context.Background(), nil)
+		ctx := fcontext.WithFlow(t.Context(), nil)
 		rval, err := flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			return "test", nil
 		}, &struct{}{})
@@ -27,7 +27,7 @@ func TestLoopFlow(t *testing.T) {
 	t.Run("Regular error handling", func(t *testing.T) {
 		testErr := errors.New("test error")
 		onErrCallCount := 0
-		ctx := fcontext.WithFlow(context.Background(), []ftype.FlowLoopOption{
+		ctx := fcontext.WithFlow(t.Context(), []ftype.FlowLoopOption{
 			ftype.WithOnError(func(err error) (continueExecution bool) {
 				onErrCallCount++
 				assert.Equal(t, testErr, err)
@@ -52,7 +52,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Context error handling", func(t *testing.T) {
-		ctx := fcontext.WithFlow(context.Background(), nil)
+		ctx := fcontext.WithFlow(t.Context(), nil)
 		ctx, cancel := context.WithCancel(ctx)
 		_, err := flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			cancel()
@@ -63,7 +63,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("The loop should replay if the replay context was cancelled, even if the callable flow returns without an error", func(t *testing.T) {
-		ctx := fcontext.WithFlow(context.Background(), nil)
+		ctx := fcontext.WithFlow(t.Context(), nil)
 		f := fcontext.MustFromContext(ctx)
 		replays := 0
 		rval, err := flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
@@ -78,7 +78,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Evict cached moments when they are skipped", func(t *testing.T) {
-		ctx := fcontext.WithFlow(context.Background(), nil)
+		ctx := fcontext.WithFlow(t.Context(), nil)
 
 		replays := 0
 		fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
@@ -120,7 +120,7 @@ func TestLoopFlow(t *testing.T) {
 	t.Run("End to end flow with steps", func(t *testing.T) {
 		errCount := 0
 		expectedErr := errors.New("test error")
-		ctx := fcontext.WithFlow(context.Background(), []ftype.FlowLoopOption{
+		ctx := fcontext.WithFlow(t.Context(), []ftype.FlowLoopOption{
 			ftype.WithOnError(func(err error) (continueExecution bool) {
 				assert.ErrorIs(t, err, expectedErr)
 				errCount++
@@ -158,5 +158,27 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, "fn1fn2", rval)
 		assert.Equal(t, 2, errCount)
 		assert.Equal(t, 3, fn1Calls)
+	})
+
+	t.Run("Applies context wrappers in order", func(t *testing.T) {
+		const collidingKey = "collidingKey"
+		wrapper1Value := "wrapper1"
+		wrapper2Value := "wrapper2"
+		ctx := fcontext.WithFlow(t.Context(), []ftype.FlowLoopOption{
+			func(flo *ftype.FlowLoopOptions) {
+				flo.ContextWrappers = append(flo.ContextWrappers, func(ctx context.Context) context.Context {
+					return context.WithValue(ctx, collidingKey, wrapper1Value)
+				})
+			},
+			func(flo *ftype.FlowLoopOptions) {
+				flo.ContextWrappers = append(flo.ContextWrappers, func(ctx context.Context) context.Context {
+					return context.WithValue(ctx, collidingKey, wrapper2Value)
+				})
+			},
+		})
+		flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			assert.Equal(t, wrapper2Value, ctx.Value(collidingKey))
+			return "test", nil
+		}, &struct{}{})
 	})
 }

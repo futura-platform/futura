@@ -36,7 +36,7 @@ func NewIdentity(ctx context.Context, callpath Callpath) Identity {
 }
 
 func (i Identity) String() string {
-	return fmt.Sprintf("key:%v\ncallpath:%s", i.key, i.callpath.V())
+	return fmt.Sprintf("key:%v callpath:%s", i.key, i.callpath.V())
 }
 
 type contextKey string
@@ -52,13 +52,18 @@ type compositeIdentityKey struct {
 
 // WithIdentityKey is a helper function that allows you to layer identity keys.
 func WithIdentityKey[T comparable](ctx context.Context, key T) context.Context {
+	parent := IdentityFromContext(ctx)
+	var genericKey any = key
+	if parent != nil {
+		genericKey = compositeIdentityKey{
+			parent: IdentityFromContext(ctx),
+			this:   key,
+		}
+	}
 	return context.WithValue(
 		ctx,
 		ContextKey,
-		compositeIdentityKey{
-			parent: IdentityFromContext(ctx),
-			this:   key,
-		},
+		genericKey,
 	)
 }
 

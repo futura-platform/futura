@@ -11,6 +11,7 @@ import (
 	"github.com/futura-platform/futura/internal/flow/fcontext"
 	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/utils/testutil"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -105,37 +106,72 @@ func TestStep(t *testing.T) {
 	})
 
 	t.Run("impure flow detection", func(t *testing.T) {
-		replay.Execute(fcontext.WithFlow(t.Context(), nil), func(ctx context.Context, args any) (any, error) {
-			f := fcontext.MustFromContext(ctx)
-			f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
-				flags.PanicOnMomentOrderChange = true
-			})
-			ctx, cancel := f.StartNewReplay(ctx)
-			defer cancel(nil)
+		t.Run("panics if the moment fn changes when it not allowed to", func(t *testing.T) {
+			replay.Execute(fcontext.WithFlow(t.Context(), nil), func(ctx context.Context, args any) (any, error) {
+				f := fcontext.MustFromContext(ctx)
+				f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
+					flags.PanicOnMomentOrderChange = true
+				})
+				ctx, cancel := f.StartNewReplay(ctx)
+				defer cancel(nil)
 
-			fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+				fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+					return nil, nil
+				})
+				fn2 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+					return nil, nil
+				})
+
+				// first eval as the code declared fn1 as this moment's fn
+				_, _, err := evaluateWithIdentity(ctx, fn1, struct{}{}, mockStableCallpathIdentity)
+				assert.NoError(t, err)
+
+				// restart and eval as if the code re-declared fn2 as this moment's fn
+				f.Rewind()
+				expectedError := ftrerrors.InconsistentStateError(moment.MomentFnChangeError{
+					Index:          0,
+					Identity:       mockStableCallpathIdentity,
+					OldMomentFnRef: fn1,
+					NewMomentFnRef: fn2,
+				})
+				assert.PanicsWithError(t, expectedError.Error(), func() {
+					evaluateWithIdentity(ctx, fn2, struct{}{}, mockStableCallpathIdentity)
+				})
+				assert.Equal(t, 0, f.SequenceIndex())
 				return nil, nil
-			})
-			fn2 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+			}, nil)
+		})
+		t.Run("panics if a new branch is taken when it not allowed to", func(t *testing.T) {
+			replay.Execute(fcontext.WithFlow(t.Context(), nil), func(ctx context.Context, args any) (any, error) {
+				f := fcontext.MustFromContext(ctx)
+				f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
+					flags.PanicOnMomentOrderChange = true
+				})
+				ctx, cancel := f.StartNewReplay(ctx)
+				defer cancel(nil)
+
+				fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+					return nil, nil
+				})
+				branch1 := moment.NewIdentity(ctx, []moment.Callsite{{File: "code.go", Line: 1}})
+				fn2 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+					return nil, nil
+				})
+				branch2 := moment.NewIdentity(ctx, []moment.Callsite{{File: "code.go", Line: 2}})
+
+				// first eval as if we took branch 1, which uses fn1
+				_, _, err := evaluateWithIdentity(ctx, fn1, struct{}{}, branch1)
+				assert.NoError(t, err)
+
+				// restart and eval as if we took branch 2, which uses fn2
+				f.Rewind()
+				testutil.PanicsWithErrorIs(t, ErrUnexpectedBranchTaken, func() {
+					evaluateWithIdentity(ctx, fn2, struct{}{}, branch2)
+				})
+				assert.Equal(t, 0, f.SequenceIndex())
 				return nil, nil
-			})
-
-			_, _, err := evaluateWithIdentity(ctx, fn1, struct{}{}, mockStableCallpathIdentity)
-			assert.NoError(t, err)
-
-			f.Rewind()
-			expectedError := ftrerrors.InconsistentStateError(moment.MomentFnChangeError{
-				Index:          0,
-				Identity:       mockStableCallpathIdentity,
-				OldMomentFnRef: fn1,
-				NewMomentFnRef: fn2,
-			})
-			assert.PanicsWithError(t, expectedError.Error(), func() {
-				evaluateWithIdentity(ctx, fn2, struct{}{}, mockStableCallpathIdentity)
-			})
-			assert.Equal(t, 0, f.SequenceIndex())
-			return nil, nil
-		}, nil)
+			}, nil)
+		})
 	})
 
 	t.Run("wraps error with label", func(t *testing.T) {
@@ -164,7 +200,7 @@ func TestStep(t *testing.T) {
 	})
 
 	t.Run("immediately returns without executing if the context is done", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(fcontext.WithFlow(context.Background(), nil))
+		ctx, cancel := context.WithCancel(fcontext.WithFlow(t.Context(), nil))
 		cancel()
 		didExecute := false
 		replay.Execute(ctx, func(ctx context.Context, args any) (any, error) {
@@ -176,5 +212,14 @@ func TestStep(t *testing.T) {
 			assert.False(t, didExecute)
 			return nil, nil
 		}, nil)
+	})
+
+	t.Run("immedietly returns with the injected error if there is one", func(t *testing.T) {
+		expectedError := errors.New("expected error")
+		ctx := testutil.WithInjectedError(fcontext.WithFlow(t.Context(), nil), testutil.InjectedErrorLevelEvaluate, expectedError)
+		_, _, err := Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+			return nil, expectedError
+		}), struct{}{})
+		assert.ErrorIs(t, err, expectedError)
 	})
 }

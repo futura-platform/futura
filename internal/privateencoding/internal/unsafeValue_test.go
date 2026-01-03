@@ -32,6 +32,12 @@ func TestUnsafeValue(t *testing.T) {
 		assertNoKindChange[chan any](t)
 		assertNoKindChange[func()](t)
 	})
+	t.Run("panics if the value can't interface and is not addressable", func(t *testing.T) {
+		v := reflect.ValueOf(struct{ hidden int }{hidden: 42}).FieldByName("hidden")
+		assert.False(t, v.CanInterface())
+		assert.False(t, v.CanAddr())
+		assert.Panics(t, func() { privateencodinginternal.UnsafeValue(v) })
+	})
 }
 
 func assertNoKindChange[T any](t *testing.T) {

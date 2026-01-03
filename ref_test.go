@@ -12,7 +12,7 @@ import (
 
 func TestRef(t *testing.T) {
 	t.Run("no initial value implies the default to be the type's zero value", func(t *testing.T) {
-		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
+		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
 			ref := futura.Ref[int](b)
 			return *ref, nil
 		}, &struct{}{})
@@ -20,7 +20,7 @@ func TestRef(t *testing.T) {
 		assert.Equal(t, 0, r)
 	})
 	t.Run("an initial value can be provided", func(t *testing.T) {
-		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
+		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
 			return *futura.Ref(b, 1), nil
 		}, &struct{}{})
 		assert.NoError(t, err)
@@ -41,7 +41,7 @@ func TestRef(t *testing.T) {
 			return "success", nil
 		}
 		actualState := 0
-		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
+		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
 			state := futura.Ref[int](b)
 			assert.Equal(t, actualState, *state)
 			actualState++
@@ -59,7 +59,7 @@ func TestRef(t *testing.T) {
 	})
 	t.Run("a change in the initial value will cause the state to be re-initialized to that new value", func(t *testing.T) {
 		srcInitialValue := 0
-		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
+		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
 			state := futura.Ref(b, srcInitialValue)
 			assert.Equal(t, srcInitialValue, *state)
 			srcInitialValue++
@@ -73,7 +73,7 @@ func TestRef(t *testing.T) {
 		assert.Equal(t, 1, r)
 	})
 	t.Run("does not panic on context cancellation", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		refDidntPanic := false
 		r, err := futura.Flow(ctx, func(b futura.FlowBuilder, _ *struct{}) (int, error) {
 			cancel()
@@ -89,7 +89,7 @@ func TestRef(t *testing.T) {
 		var expectedErr = errors.New("expected error")
 		_, err := futura.Flow(
 			testutil.WithInjectedError(
-				context.Background(),
+				t.Context(),
 				testutil.InjectedErrorLevelEvaluate,
 				expectedErr,
 			),

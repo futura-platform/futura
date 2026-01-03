@@ -11,10 +11,12 @@ import (
 	flog_internal "github.com/futura-platform/futura/internal/flog"
 )
 
-var noopLogger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
-	// filter out all logs
-	Level: slog.Level(math.MaxInt),
-}))
+var (
+	noopLogger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
+		// filter out all logs
+		Level: slog.Level(math.MaxInt),
+	}))
+)
 
 func FromContext(ctx context.Context) *slog.Logger {
 	logger, ok := ctx.Value(flog_internal.ContextKey).(*slog.Logger)

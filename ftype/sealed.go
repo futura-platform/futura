@@ -40,10 +40,13 @@ func Seal[T any](value T) Sealed[T] {
 // The return value is guaranteed to have the same shape
 // as the input value, but it is not guaranteed to have the same pointers.
 func (s sealedWithString[T]) V() T {
-	dec := privateencoding.NewDecoder[T](strings.NewReader(s.comparableSerialized))
+	reader := strings.NewReader(s.comparableSerialized)
+	dec := privateencoding.NewDecoder[T](reader)
 	value, err := dec.Decode()
 	if err != nil {
 		panic(fmt.Errorf("failed to decode sealed value: %w", err))
+	} else if reader.Len() != 0 {
+		panic(fmt.Errorf("expected reader to be at the end, still have remaining bytes: %d", reader.Len()))
 	}
 	return value
 }

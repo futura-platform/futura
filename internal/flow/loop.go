@@ -9,11 +9,13 @@ import (
 	"github.com/futura-platform/futura/internal/flow/replay"
 )
 
+type callableFlow[A, T any] func(ctx context.Context, args A) (T, error)
+
 // Loop implements the core logic of the flow. It is responsible for:
 // - executing the flow fn
 // - handling errors
 // - rewinding the sequence
-func Loop[A, T any](ctx context.Context, callableFlow func(ctx context.Context, args A) (T, error), args A) (T, error) {
+func Loop[A, T any](ctx context.Context, callableFlow callableFlow[A, T], args A) (T, error) {
 	f := fcontext.MustFromContext(ctx)
 	opts := &ftype.FlowLoopOptions{}
 	for _, option := range f.Options() {

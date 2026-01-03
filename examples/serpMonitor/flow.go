@@ -21,7 +21,8 @@ func serpMonitorFlow(b futura.FlowBuilder, term string) ([]serpEntry, error) {
 	}
 
 	var lastRankings ftype.Sealed[serpRankings]
-	for ; ; time.Sleep(time.Second) {
+	for i := 0; ; func() { i++; time.Sleep(time.Second) }() {
+		b := b.WithKey(i)
 		newRankings, err := futura.Step(b, fetchRankings, fetchRankingsParams{
 			term:         term,
 			sessionValid: sessionValid.V(),
