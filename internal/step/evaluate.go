@@ -3,6 +3,7 @@ package step
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/futura-platform/futura/flog"
@@ -10,6 +11,8 @@ import (
 	"github.com/futura-platform/futura/internal/flow/fcontext"
 	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/utils/testutil"
+	"k8s.io/utils/diff"
 )
 
 var (
@@ -17,12 +20,15 @@ var (
 	ErrUnexpectedBranchTaken        = errors.New("unexpected branch taken, new branches should only be triggered by a futura state change")
 )
 
-// todo: Add the ability to pass in a "key" to explicitly add something to the cache key. This will be required in loops, like how it is in React.
 func Evaluate[A comparable, R comparable](
 	ctx context.Context,
 	fn moment.Fn[A, R],
 	args A,
 ) (output R, invalidate func(), err error) {
+	if err = testutil.InjectedError(ctx, testutil.InjectedErrorLevelEvaluate); err != nil {
+		return
+	}
+
 	callpath, ok := replay.GetClosestReplayUserCallpath(0)
 	if !ok {
 		panic(ftrerrors.InconsistentStateError(ErrEvaledOutsideOfAFlowFunction))
@@ -30,6 +36,8 @@ func Evaluate[A comparable, R comparable](
 
 	return evaluateWithIdentity(ctx, fn, args, moment.NewIdentity(ctx, callpath))
 }
+
+var ErrEvalFailed = errors.New("eval failed")
 
 func evaluateWithIdentity[A comparable, R comparable](
 	ctx context.Context,
@@ -50,20 +58,29 @@ func evaluateWithIdentity[A comparable, R comparable](
 		r := recover()
 		l.LogAttrs(ctx, slog.LevelDebug, "evaluated step",
 			slog.String("label", fn.Label()),
-			slog.Bool("success", err == nil),
 			slog.Int("index", thisSequenceIndex),
 			slog.String("cache_status", cacheStatus),
+			slog.String("error", fmt.Sprint(err)),
 		)
 		if r != nil {
 			panic(r)
+		} else if err != nil {
+			err = fmt.Errorf("%s: %w: %w", fn.Label(), ErrEvalFailed, err)
 		}
 	}()
 
 	// first check if the expected callpath is the same as the current callpath,
 	// if nothing is expected (meaning if ok is false), we can continue
 	expectedIdentity, ok := f.ExpectedIdentity()
-	if ok && expectedIdentity != identity && f.ReplayFlags().PanicOnMomentOrderChange {
-		panic(ftrerrors.InconsistentStateError(ErrUnexpectedBranchTaken))
+	if ok && expectedIdentity.Callpath() != identity.Callpath() && f.ReplayFlags().PanicOnMomentOrderChange {
+		panic(ftrerrors.InconsistentStateError(fmt.Errorf(
+			"%w:\n%s",
+			ErrUnexpectedBranchTaken,
+			diff.ObjectGoPrintSideBySide(
+				expectedIdentity.Callpath().V(),
+				identity.Callpath().V(),
+			),
+		)))
 	}
 
 	// then get the moment from the cache

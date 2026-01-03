@@ -119,9 +119,10 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("End to end flow with steps", func(t *testing.T) {
 		errCount := 0
+		expectedErr := errors.New("test error")
 		ctx := fcontext.WithFlow(context.Background(), []ftype.FlowLoopOption{
 			ftype.WithOnError(func(err error) (continueExecution bool) {
-				assert.Equal(t, "test error", err.Error())
+				assert.ErrorIs(t, err, expectedErr)
 				errCount++
 				return true
 			}),
@@ -131,7 +132,7 @@ func TestLoopFlow(t *testing.T) {
 		failsTwice := moment.NewFn(func(ctx context.Context, _ *any) (string, error) {
 			fn1Calls++
 			if fn1Calls <= 2 {
-				return "", errors.New("test error")
+				return "", expectedErr
 			}
 			return "fn1", nil
 		}, ftype.WithLabel("failsTwice"))

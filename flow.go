@@ -13,7 +13,10 @@ import (
 
 type FlowFn[A, R any] func(b FlowBuilder, args A) (R, error)
 
-var ErrTopLevelFlowConflict = errors.New("do not call futura.Flow from within a flow")
+var (
+	ErrTopLevelFlowConflict = errors.New("do not call futura.Flow from within a flow")
+	ErrFlowPanic            = errors.New("flow panicked")
+)
 
 // Flow executes the flow fn, and is intended to be the entry point for a flow.
 // It expects fn to be pure, except in child Step functions. It will continuously retry the flow until it is without error or the context is done.
@@ -22,9 +25,9 @@ func Flow[A, R any](ctx context.Context, fn FlowFn[A, R], args A, options ...fty
 		if r := recover(); r != nil {
 			switch r := r.(type) {
 			case error:
-				err = fmt.Errorf("panic: %w", r)
+				err = fmt.Errorf("%w: %w", ErrFlowPanic, r)
 			default:
-				err = fmt.Errorf("panic: %v", r)
+				err = fmt.Errorf("%w: %v", ErrFlowPanic, r)
 			}
 			err = fmt.Errorf("%w\n%s", err, debug.Stack())
 		}

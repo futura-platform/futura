@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/futura-platform/futura/internal/donotcompare"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/utils"
 )
 
 // A Moment represents an Fn instance and its returned successful output at a specific point in time.
@@ -60,7 +60,7 @@ func (m *Moment) Invalidate() {
 // identities should always lead to the same fn. If they don't, this error is thrown.
 // something like passing the moment fn function as a variable value that changes between replays to a step call would cause this.
 type MomentFnChangeError struct {
-	donotcompare.T
+	utils.Donotcompare
 	Index                          int
 	Identity                       Identity
 	OldMomentFnRef, NewMomentFnRef anyFn

@@ -26,3 +26,12 @@ func TestFnLabel(t *testing.T) {
 		assert.Equal(t, "test2", test2Labelled.Label())
 	})
 }
+
+func TestFnOptions(t *testing.T) {
+	t.Run("applies from first to last", func(t *testing.T) {
+		label1 := "label1"
+		label2 := "label2"
+		fn := NewFn(labelToInfer, ftype.WithLabel(label1), ftype.WithLabel(label2))
+		assert.Equal(t, label2, fn.Label())
+	})
+}

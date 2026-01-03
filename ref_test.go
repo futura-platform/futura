@@ -6,10 +6,19 @@ import (
 	"testing"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRef(t *testing.T) {
+	t.Run("no initial value implies the default to be the type's zero value", func(t *testing.T) {
+		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
+			ref := futura.Ref[int](b)
+			return *ref, nil
+		}, &struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 0, r)
+	})
 	t.Run("an initial value can be provided", func(t *testing.T) {
 		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ *struct{}) (int, error) {
 			return *futura.Ref(b, 1), nil
@@ -63,7 +72,6 @@ func TestRef(t *testing.T) {
 		assert.Equal(t, 2, srcInitialValue)
 		assert.Equal(t, 1, r)
 	})
-
 	t.Run("does not panic on context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		refDidntPanic := false
@@ -76,5 +84,22 @@ func TestRef(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.True(t, refDidntPanic)
 		assert.Equal(t, 0, r) // should be the zero value of the type
+	})
+	t.Run("panics if the evaluation fails", func(t *testing.T) {
+		var expectedErr = errors.New("expected error")
+		_, err := futura.Flow(
+			testutil.WithInjectedError(
+				context.Background(),
+				testutil.InjectedErrorLevelEvaluate,
+				expectedErr,
+			),
+			func(b futura.FlowBuilder, _ *struct{}) (int, error) {
+				futura.Ref(b, 1)
+				return 0, nil
+			},
+			&struct{}{},
+		)
+		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, expectedErr)
 	})
 }

@@ -3,12 +3,15 @@ package step
 import (
 	"context"
 	"errors"
+
 	"testing"
 
+	"github.com/futura-platform/futura/ftype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/fcontext"
 	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -62,14 +65,14 @@ func TestStep(t *testing.T) {
 
 			_, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
 			assert.Error(t, err)
-			assert.Equal(t, expectedError, err)
+			assert.ErrorIs(t, err, expectedError)
 			assert.Equal(t, 0, f.SequenceIndex())
 			assert.Equal(t, 1, callCount)
 
 			f.Rewind()
 			_, _, err = evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
 			assert.Error(t, err)
-			assert.Equal(t, expectedError, err)
+			assert.ErrorIs(t, err, expectedError)
 			assert.Equal(t, 0, f.SequenceIndex())
 			assert.Equal(t, 2, callCount)
 			return nil, nil
@@ -131,6 +134,23 @@ func TestStep(t *testing.T) {
 				evaluateWithIdentity(ctx, fn2, struct{}{}, mockStableCallpathIdentity)
 			})
 			assert.Equal(t, 0, f.SequenceIndex())
+			return nil, nil
+		}, nil)
+	})
+
+	t.Run("wraps error with label", func(t *testing.T) {
+		label := "testLabel"
+		testErr := errors.New("expected error")
+		replay.Execute(fcontext.WithFlow(t.Context(), nil), func(ctx context.Context, args any) (any, error) {
+			f := fcontext.MustFromContext(ctx)
+			ctx, cancel := f.StartNewReplay(ctx)
+			defer cancel(nil)
+			_, _, err := evaluateWithIdentity(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+				return nil, testErr
+			}, ftype.WithLabel(label)), struct{}{}, mockStableCallpathIdentity)
+			assert.ErrorIs(t, err, ErrEvalFailed)
+			assert.ErrorIs(t, err, testErr)
+			assert.ErrorContains(t, err, label)
 			return nil, nil
 		}, nil)
 	})

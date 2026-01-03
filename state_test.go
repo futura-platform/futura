@@ -10,6 +10,14 @@ import (
 )
 
 func TestState(t *testing.T) {
+	t.Run("no initial value implies the default to be the type's zero value", func(t *testing.T) {
+		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			state := futura.State[int](b)
+			return state.V(), nil
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 0, r)
+	})
 	t.Run("an initial value can be provided", func(t *testing.T) {
 		r, err := futura.Flow(context.Background(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 1)
