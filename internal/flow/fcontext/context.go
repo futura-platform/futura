@@ -29,12 +29,12 @@ type flowContext struct {
 	cancelCurrentReplay context.CancelCauseFunc
 
 	// the current state of the flow.
-	stateCache map[ftype.Sealed[moment.Callpath]]*moment.Moment
+	stateCache map[moment.Identity]*moment.Moment
 	// this includes the callpaths that have not been seen yet in the current replay.
-	unseenCachedCallpaths mapset.Set[ftype.Sealed[moment.Callpath]]
+	unseenCachedCallpaths mapset.Set[moment.Identity]
 
 	// given a certain state, this sequence should be deterministic.
-	callOrder     []ftype.Sealed[moment.Callpath]
+	callOrder     []moment.Identity
 	sequenceIndex int
 }
 
@@ -42,7 +42,7 @@ func WithFlow(ctx context.Context, options []ftype.FlowLoopOption) context.Conte
 	return context.WithValue(ctx, flowContextKey, &flowContext{
 		options:            options,
 		creatorGoroutineID: goid.Get(),
-		stateCache:         make(map[ftype.Sealed[moment.Callpath]]*moment.Moment),
+		stateCache:         make(map[moment.Identity]*moment.Moment),
 	})
 }
 
@@ -60,10 +60,10 @@ func (f *flowContext) SequenceIndex() int {
 
 func (f *flowContext) EvictUnseenCachedStates(ctx context.Context) {
 	l := flog.FromContext(ctx)
-	for callpath := range mapset.Elements(f.unseenCachedCallpaths) {
-		delete(f.stateCache, callpath)
+	for identity := range mapset.Elements(f.unseenCachedCallpaths) {
+		delete(f.stateCache, identity)
 		l.LogAttrs(ctx, slog.LevelDebug, "evicted cached state",
-			slog.String("callpath", callpath.V().String()),
+			slog.String("identity", identity.String()),
 		)
 	}
 }
@@ -99,7 +99,7 @@ func (f *flowContext) StartNewReplay(ctx context.Context) (context.Context, cont
 }
 
 func (f *flowContext) resetUnseenCachedCallpaths() {
-	f.unseenCachedCallpaths = mapset.NewSetWithSize[ftype.Sealed[moment.Callpath]](len(f.stateCache))
+	f.unseenCachedCallpaths = mapset.NewSetWithSize[moment.Identity](len(f.stateCache))
 	for callpath := range f.stateCache {
 		f.unseenCachedCallpaths.Add(callpath)
 	}
@@ -113,44 +113,44 @@ func (f *flowContext) SetReplayFlags(flags func(flags *ReplayFlags)) {
 	flags(&f.replayFlags)
 }
 
-func (f *flowContext) ExpectedCallpath() (ftype.Sealed[moment.Callpath], bool) {
+func (f *flowContext) ExpectedIdentity() (moment.Identity, bool) {
 	if f.sequenceIndex > len(f.callOrder) {
 		panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
 			sequenceIndex:  f.sequenceIndex,
 			sequenceLength: len(f.callOrder),
 		}))
 	} else if f.sequenceIndex == len(f.callOrder) {
-		return nil, false
+		return moment.Identity{}, false
 	}
 
-	callsite := f.callOrder[f.sequenceIndex]
-	return callsite, true
+	identity := f.callOrder[f.sequenceIndex]
+	return identity, true
 }
 
-func (f *flowContext) GetMoment(callpath ftype.Sealed[moment.Callpath]) (*moment.Moment, bool) {
-	moment, ok := f.stateCache[callpath]
+func (f *flowContext) GetMoment(identity moment.Identity) (*moment.Moment, bool) {
+	moment, ok := f.stateCache[identity]
 	return moment, ok
 }
 
-func (f *flowContext) InvalidateMoment(callpath ftype.Sealed[moment.Callpath]) {
-	delete(f.stateCache, callpath)
+func (f *flowContext) InvalidateMoment(identity moment.Identity) {
+	delete(f.stateCache, identity)
 }
 
-// RecordCurrentMoment stores the current callpath+moment (growing the sequence slice if necessary)
-// it also marks the callpath as seen.
-func (f *flowContext) RecordCurrentMoment(callpath ftype.Sealed[moment.Callpath], currentMoment *moment.Moment) {
+// RecordCurrentMoment stores the current identity+moment (growing the sequence slice if necessary)
+// it also marks the identity as seen.
+func (f *flowContext) RecordCurrentMoment(identity moment.Identity, currentMoment *moment.Moment) {
 	if f.sequenceIndex > len(f.callOrder) {
 		panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
 			sequenceIndex:  f.sequenceIndex,
 			sequenceLength: len(f.callOrder),
 		}))
 	} else if f.sequenceIndex == len(f.callOrder) {
-		f.callOrder = append(f.callOrder, callpath)
+		f.callOrder = append(f.callOrder, identity)
 	} else {
-		f.callOrder[f.sequenceIndex] = callpath
+		f.callOrder[f.sequenceIndex] = identity
 	}
-	f.unseenCachedCallpaths.Remove(callpath)
-	f.stateCache[callpath] = currentMoment
+	f.unseenCachedCallpaths.Remove(identity)
+	f.stateCache[identity] = currentMoment
 }
 
 // Advance advances the sequence index by 1.

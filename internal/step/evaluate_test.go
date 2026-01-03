@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var mockStableCallpath = []moment.Callsite{{
+var mockStableCallpathIdentity = moment.NewIdentity(context.Background(), []moment.Callsite{{
 	File: "mock.go",
 	Line: 1,
-}}
+}})
 
 func TestStep(t *testing.T) {
 	t.Run("memoize result for identical inputs", func(t *testing.T) {
@@ -31,14 +31,14 @@ func TestStep(t *testing.T) {
 				return expectedResult, nil
 			})
 
-			result1, _, err := evaluateWithCallsite(ctx, fn, struct{}{}, mockStableCallpath)
+			result1, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
 			assert.NoError(t, err)
 			assert.Equal(t, expectedResult, result1)
 			assert.Equal(t, 1, f.SequenceIndex())
 			assert.Equal(t, 1, callCount)
 
 			f.Rewind()
-			result2, _, err := evaluateWithCallsite(ctx, fn, struct{}{}, mockStableCallpath)
+			result2, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
 			assert.NoError(t, err)
 			assert.Equal(t, result1, result2)
 			assert.Equal(t, 1, f.SequenceIndex())
@@ -60,14 +60,14 @@ func TestStep(t *testing.T) {
 				return nil, expectedError
 			})
 
-			_, _, err := evaluateWithCallsite(ctx, fn, struct{}{}, mockStableCallpath)
+			_, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
 			assert.Error(t, err)
 			assert.Equal(t, expectedError, err)
 			assert.Equal(t, 0, f.SequenceIndex())
 			assert.Equal(t, 1, callCount)
 
 			f.Rewind()
-			_, _, err = evaluateWithCallsite(ctx, fn, struct{}{}, mockStableCallpath)
+			_, _, err = evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
 			assert.Error(t, err)
 			assert.Equal(t, expectedError, err)
 			assert.Equal(t, 0, f.SequenceIndex())
@@ -88,13 +88,13 @@ func TestStep(t *testing.T) {
 				return calls, nil
 			})
 
-			result1, invalidate, err := evaluateWithCallsite(ctx, fn, struct{}{}, mockStableCallpath)
+			result1, invalidate, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, result1)
 
 			invalidate()
 			f.Rewind()
-			result2, _, err := evaluateWithCallsite(ctx, fn, struct{}{}, mockStableCallpath)
+			result2, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
 			assert.NoError(t, err)
 			assert.Equal(t, 2, result2)
 			return nil, nil
@@ -117,18 +117,18 @@ func TestStep(t *testing.T) {
 				return nil, nil
 			})
 
-			_, _, err := evaluateWithCallsite(ctx, fn1, struct{}{}, mockStableCallpath)
+			_, _, err := evaluateWithIdentity(ctx, fn1, struct{}{}, mockStableCallpathIdentity)
 			assert.NoError(t, err)
 
 			f.Rewind()
 			expectedError := ftrerrors.InconsistentStateError(moment.MomentFnChangeError{
 				Index:          0,
-				Callpath:       mockStableCallpath,
+				Identity:       mockStableCallpathIdentity,
 				OldMomentFnRef: fn1,
 				NewMomentFnRef: fn2,
 			})
 			assert.PanicsWithError(t, expectedError.Error(), func() {
-				evaluateWithCallsite(ctx, fn2, struct{}{}, mockStableCallpath)
+				evaluateWithIdentity(ctx, fn2, struct{}{}, mockStableCallpathIdentity)
 			})
 			assert.Equal(t, 0, f.SequenceIndex())
 			return nil, nil

@@ -3,12 +3,13 @@ package moment
 import (
 	"fmt"
 	"runtime"
-	"slices"
 
+	"github.com/futura-platform/futura/internal/donotcompare"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 )
 
 // A Moment represents an Fn instance and its returned successful output at a specific point in time.
+// This is separate from the actual Identifier of the specific point in time. That is represented by Identity.
 type Moment struct {
 	callableRef anyFn
 	input       any
@@ -29,7 +30,7 @@ func NewMoment[A comparable](callable anyFn, input A) *Moment {
 // Basically, if the input has changed, the moment is no longer valid.
 // This will panic if it detects an impurity in the flow.
 // againstFn must be a function, this should not change between replays for each moment.
-func (m Moment) Validate(index int, againstFn anyFn, input any, callpath Callpath) (valid bool) {
+func (m Moment) Validate(index int, againstFn anyFn, input any, identity Identity) (valid bool) {
 	// check if the new fn is diverging from the existing moment's fn
 	againstFnRef := againstFn.runtimeFunc()
 	oldMomentFnRef := m.callableRef.runtimeFunc()
@@ -38,7 +39,7 @@ func (m Moment) Validate(index int, againstFn anyFn, input any, callpath Callpat
 			Index:          index,
 			OldMomentFnRef: m.callableRef,
 			NewMomentFnRef: againstFn,
-			Callpath:       callpath,
+			Identity:       identity,
 		}))
 	}
 	return m.input == input && !m.invalidated
@@ -56,11 +57,12 @@ func (m *Moment) Invalidate() {
 	m.invalidated = true
 }
 
-// callpath's should always lead to the same fn. If they don't, this error is thrown.
+// identities should always lead to the same fn. If they don't, this error is thrown.
 // something like passing the moment fn function as a variable value that changes between replays to a step call would cause this.
 type MomentFnChangeError struct {
+	donotcompare.T
 	Index                          int
-	Callpath                       Callpath
+	Identity                       Identity
 	OldMomentFnRef, NewMomentFnRef anyFn
 }
 
@@ -71,7 +73,7 @@ func (e MomentFnChangeError) Is(target error) bool {
 	}
 
 	return e.Index == t.Index &&
-		slices.Equal(e.Callpath, t.Callpath) &&
+		e.Identity == t.Identity &&
 		e.OldMomentFnRef.runtimeFunc() == t.OldMomentFnRef.runtimeFunc() &&
 		e.NewMomentFnRef.runtimeFunc() == t.NewMomentFnRef.runtimeFunc()
 }
@@ -83,6 +85,6 @@ func (e MomentFnChangeError) Error() string {
 		e.Index,
 		e.OldMomentFnRef.Label(),
 		e.NewMomentFnRef.Label(),
-		e.Callpath,
+		e.Identity,
 	)
 }

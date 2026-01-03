@@ -53,7 +53,7 @@ func TestFlow(t *testing.T) {
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
 		assert.ErrorIs(t, err, moment.MomentFnChangeError{
 			Index:          0,
-			Callpath:       []moment.Callsite{{File: file, Line: 50}},
+			Identity:       moment.NewIdentity(context.Background(), []moment.Callsite{{File: file, Line: 50}}),
 			OldMomentFnRef: moment.NewFn(fn1),
 			NewMomentFnRef: moment.NewFn(fn2),
 		})
