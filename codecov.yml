@@ -1,3 +1,7 @@
 ignore:
+  # utilities that are only used for testing
   - "internal/utils/testutil"
+  # the function here just served as a compiler assertion to make sure the type is comparable, it's not testable
   - "internal/flow/moment/identity_comparable.go"
+  # there is a branch specific to verbose tests, this is impossible to unit test
+  - "flog/defaultLogger.go"
