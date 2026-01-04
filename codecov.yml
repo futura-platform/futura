@@ -1,0 +1,3 @@
+ignore:
+  - "internal/utils/testutil"
+  - "internal/flow/moment/identity_comparable.go"
