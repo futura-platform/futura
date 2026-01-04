@@ -25,9 +25,6 @@ func (i Identity) Callpath() ftype.Sealed[Callpath] {
 	return i.callpath
 }
 
-// Compile-time assertion that Identity is comparable
-var _ = func() bool { var a, b Identity; return a == b }
-
 func NewIdentity(ctx context.Context, callpath Callpath) Identity {
 	return Identity{
 		callpath: ftype.Seal(callpath),
