@@ -5,7 +5,7 @@ on: push
 jobs:
   test:
     name: Run tests and collect coverage
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test -coverprofile=coverage.txt
+        run: ./test-coverage.sh
 
       - name: Upload results to Codecov
         uses: codecov/codecov-action@v5
