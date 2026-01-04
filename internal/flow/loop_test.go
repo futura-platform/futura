@@ -24,31 +24,33 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, "test", rval)
 	})
 
+	t.Run("Flow cancellation", func(t *testing.T) {
+		ctx := fcontext.WithFlow(t.Context(), nil)
+		_, err := flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			return "", ftype.ErrCancelFlow
+		}, &struct{}{})
+		assert.ErrorIs(t, err, ftype.ErrCancelFlow)
+	})
+
 	t.Run("Regular error handling", func(t *testing.T) {
 		testErr := errors.New("test error")
-		onErrCallCount := 0
-		ctx := fcontext.WithFlow(t.Context(), []ftype.FlowLoopOption{
-			ftype.WithOnError(func(err error) (continueExecution bool) {
-				onErrCallCount++
-				assert.Equal(t, testErr, err)
-				return onErrCallCount < 2
-			}),
-		})
+		ctx := fcontext.WithFlow(t.Context(), nil)
 
 		fnCallCount := 0
 		rval, err := flow.Loop(
 			ctx,
 			func(ctx context.Context, _ *struct{}) (string, error) {
 				fnCallCount++
+				if fnCallCount >= 2 {
+					return "result", nil
+				}
 				return "", testErr
 			},
 			&struct{}{},
 		)
-		assert.Equal(t, 2, onErrCallCount)
 		assert.Equal(t, 2, fnCallCount)
-		assert.Equal(t, "", rval)
-		assert.Error(t, err)
-		assert.Equal(t, testErr, err)
+		assert.Equal(t, "result", rval)
+		assert.NoError(t, err)
 	})
 
 	t.Run("Context error handling", func(t *testing.T) {
@@ -121,7 +123,7 @@ func TestLoopFlow(t *testing.T) {
 		errCount := 0
 		expectedErr := errors.New("test error")
 		ctx := fcontext.WithFlow(t.Context(), []ftype.FlowLoopOption{
-			ftype.WithOnError(func(err error) (continueExecution bool) {
+			ftype.WithOnStepError(func(err error) (continueExecution bool) {
 				assert.ErrorIs(t, err, expectedErr)
 				errCount++
 				return true

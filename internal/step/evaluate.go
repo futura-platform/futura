@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 
 	"github.com/futura-platform/futura/flog"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
@@ -29,26 +30,36 @@ func Evaluate[A comparable, R comparable](
 		return
 	}
 
-	callpath, ok := replay.GetClosestReplayUserCallpath(0)
+	callstack, ok := replay.GetClosestReplayUserCallstack(0)
 	if !ok {
 		panic(ftrerrors.InconsistentStateError(ErrEvaledOutsideOfAFlowFunction))
 	}
 
-	return evaluateWithIdentity(ctx, fn, args, moment.NewIdentity(ctx, callpath))
+	return evaluateWithCallstack(
+		ctx,
+		fn,
+		args,
+		callstack,
+	)
 }
 
 var ErrEvalFailed = errors.New("eval failed")
 
-func evaluateWithIdentity[A comparable, R comparable](
+func evaluateWithCallstack[A comparable, R comparable](
 	ctx context.Context,
 	fn moment.Fn[A, R],
 	args A,
-	identity moment.Identity,
+	callstack []runtime.Frame,
 ) (output R, invalidate func(), err error) {
 	if ctx.Err() != nil {
 		err = ctx.Err()
 		return
 	}
+	identity := moment.NewIdentity(
+		ctx,
+		replay.CallstackToCallpath(callstack),
+	)
+
 	f := fcontext.MustFromContext(ctx)
 	l := flog.FromContext(ctx)
 
@@ -102,7 +113,7 @@ func evaluateWithIdentity[A comparable, R comparable](
 	}()
 	// validate it. If it no longer valid, re execute it and update the cache
 	if needsExecution {
-		output, err = fn.Call(ctx, args)
+		output, err = call(ctx, fn, args, callstack)
 		if err != nil {
 			return
 		}

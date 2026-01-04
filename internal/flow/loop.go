@@ -45,17 +45,9 @@ func Loop[A, T any](ctx context.Context, callableFlow callableFlow[A, T], args A
 			goto restartReplay
 		} else if err == nil {
 			return result, nil
-		}
-
-		// if we encounter any other error, handle it
-		if opts.Hooks.OnError != nil {
-			for _, onError := range opts.Hooks.OnError {
-				continueExecution := onError(err)
-				// short circuit if any onError handler returns false
-				if !continueExecution {
-					return result, err
-				}
-			}
+		} else if errors.Is(err, ftype.ErrCancelFlow) {
+			// special case to immedieately return the error from the loop.
+			return result, err
 		}
 	}
 }

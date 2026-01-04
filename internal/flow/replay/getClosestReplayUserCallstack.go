@@ -6,23 +6,22 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay/calliter"
 )
 
-func GetClosestReplayUserCallpath(skip int) (moment.Callpath, bool) {
+func GetClosestReplayUserCallstack(skip int) ([]runtime.Frame, bool) {
 	// targetFile, targetLine := executeReplayCallFlowLocation()
-	var accumulatedCallpath moment.Callpath
+	var accumulatedCallstack []runtime.Frame
 	for frame := range calliter.NewFrameIter(8, skip+1) {
 		if isExecuteReplayCallFlowFrame(frame) {
 			// the callpath is built in reverse order, so we need to reverse it before returning
-			slices.Reverse(accumulatedCallpath)
-			return accumulatedCallpath, len(accumulatedCallpath) > 0
+			slices.Reverse(accumulatedCallstack)
+			return accumulatedCallstack, len(accumulatedCallstack) > 0
 		} else if isFuturaFile(frame.File) && !isTestFile(frame.File) && !isFuturaExampleFile(frame.File) {
 			// no need to record futura frames in the callpath
 			continue
 		}
-		accumulatedCallpath = append(accumulatedCallpath, moment.Callsite{File: frame.File, Line: frame.Line})
+		accumulatedCallstack = append(accumulatedCallstack, frame)
 	}
 	return nil, false
 }

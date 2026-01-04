@@ -30,21 +30,20 @@ func TestWithOnError(t *testing.T) {
 				return "failed", err
 			}
 			return "success", nil
-		}, nil, ftype.WithOnError(onError))
+		}, nil, ftype.WithOnStepError(onError))
 		assert.Equal(t, 3, onErrorCallCount)
 		assert.ErrorIs(t, err, testErr)
 		assert.Equal(t, "failed", r)
 	})
 
-	t.Run("Multiple OnError hooks should be called in their registration order", func(t *testing.T) {
-		var onError1Calls, onError2Calls int
+	t.Run("Multiple WithOnStepError options should be called reverse of their registration order", func(t *testing.T) {
+		callOrder := []string{}
 		onError1 := func(err error) (continueExecution bool) {
-			onError1Calls++
+			callOrder = append(callOrder, "onError1")
 			return true
 		}
 		onError2 := func(err error) (continueExecution bool) {
-			assert.Equal(t, 1, onError1Calls)
-			onError2Calls++
+			callOrder = append(callOrder, "onError2")
 			return false
 		}
 		testErr := errors.New("test error")
@@ -56,9 +55,8 @@ func TestWithOnError(t *testing.T) {
 				return "failed", err
 			}
 			return "success", nil
-		}, nil, ftype.WithOnError(onError1), ftype.WithOnError(onError2))
-		assert.Equal(t, 1, onError1Calls)
-		assert.Equal(t, 1, onError2Calls)
+		}, nil, ftype.WithOnStepError(onError1), ftype.WithOnStepError(onError2))
+		assert.Equal(t, []string{"onError2", "onError1"}, callOrder)
 		assert.ErrorIs(t, err, testErr)
 		assert.Equal(t, "failed", r)
 	})

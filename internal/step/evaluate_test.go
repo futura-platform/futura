@@ -3,6 +3,7 @@ package step
 import (
 	"context"
 	"errors"
+	"runtime"
 
 	"testing"
 
@@ -16,10 +17,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var mockStableCallpathIdentity = moment.NewIdentity(context.Background(), []moment.Callsite{{
+var mockStableCallstack = []runtime.Frame{{
 	File: "mock.go",
 	Line: 1,
-}})
+}}
 
 func TestStep(t *testing.T) {
 	t.Run("memoize result for identical inputs", func(t *testing.T) {
@@ -35,14 +36,14 @@ func TestStep(t *testing.T) {
 				return expectedResult, nil
 			})
 
-			result1, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
+			result1, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, expectedResult, result1)
 			assert.Equal(t, 1, f.SequenceIndex())
 			assert.Equal(t, 1, callCount)
 
 			f.Rewind()
-			result2, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
+			result2, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, result1, result2)
 			assert.Equal(t, 1, f.SequenceIndex())
@@ -64,14 +65,14 @@ func TestStep(t *testing.T) {
 				return nil, expectedError
 			})
 
-			_, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
+			_, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.Error(t, err)
 			assert.ErrorIs(t, err, expectedError)
 			assert.Equal(t, 0, f.SequenceIndex())
 			assert.Equal(t, 1, callCount)
 
 			f.Rewind()
-			_, _, err = evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
+			_, _, err = evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.Error(t, err)
 			assert.ErrorIs(t, err, expectedError)
 			assert.Equal(t, 0, f.SequenceIndex())
@@ -92,13 +93,13 @@ func TestStep(t *testing.T) {
 				return calls, nil
 			})
 
-			result1, invalidate, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
+			result1, invalidate, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, result1)
 
 			invalidate()
 			f.Rewind()
-			result2, _, err := evaluateWithIdentity(ctx, fn, struct{}{}, mockStableCallpathIdentity)
+			result2, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, 2, result2)
 			return nil, nil
@@ -123,19 +124,19 @@ func TestStep(t *testing.T) {
 				})
 
 				// first eval as the code declared fn1 as this moment's fn
-				_, _, err := evaluateWithIdentity(ctx, fn1, struct{}{}, mockStableCallpathIdentity)
+				_, _, err := evaluateWithCallstack(ctx, fn1, struct{}{}, mockStableCallstack)
 				assert.NoError(t, err)
 
 				// restart and eval as if the code re-declared fn2 as this moment's fn
 				f.Rewind()
 				expectedError := ftrerrors.InconsistentStateError(moment.MomentFnChangeError{
 					Index:          0,
-					Identity:       mockStableCallpathIdentity,
+					Identity:       moment.NewIdentity(ctx, replay.CallstackToCallpath(mockStableCallstack)),
 					OldMomentFnRef: fn1,
 					NewMomentFnRef: fn2,
 				})
 				assert.PanicsWithError(t, expectedError.Error(), func() {
-					evaluateWithIdentity(ctx, fn2, struct{}{}, mockStableCallpathIdentity)
+					evaluateWithCallstack(ctx, fn2, struct{}{}, mockStableCallstack)
 				})
 				assert.Equal(t, 0, f.SequenceIndex())
 				return nil, nil
@@ -153,20 +154,20 @@ func TestStep(t *testing.T) {
 				fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 					return nil, nil
 				})
-				branch1 := moment.NewIdentity(ctx, []moment.Callsite{{File: "code.go", Line: 1}})
+				branch1 := []runtime.Frame{{File: "code.go", Line: 1}}
 				fn2 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 					return nil, nil
 				})
-				branch2 := moment.NewIdentity(ctx, []moment.Callsite{{File: "code.go", Line: 2}})
+				branch2 := []runtime.Frame{{File: "code.go", Line: 2}}
 
 				// first eval as if we took branch 1, which uses fn1
-				_, _, err := evaluateWithIdentity(ctx, fn1, struct{}{}, branch1)
+				_, _, err := evaluateWithCallstack(ctx, fn1, struct{}{}, branch1)
 				assert.NoError(t, err)
 
 				// restart and eval as if we took branch 2, which uses fn2
 				f.Rewind()
 				testutil.PanicsWithErrorIs(t, ErrUnexpectedBranchTaken, func() {
-					evaluateWithIdentity(ctx, fn2, struct{}{}, branch2)
+					evaluateWithCallstack(ctx, fn2, struct{}{}, branch2)
 				})
 				assert.Equal(t, 0, f.SequenceIndex())
 				return nil, nil
@@ -181,9 +182,9 @@ func TestStep(t *testing.T) {
 			f := fcontext.MustFromContext(ctx)
 			ctx, cancel := f.StartNewReplay(ctx)
 			defer cancel(nil)
-			_, _, err := evaluateWithIdentity(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+			_, _, err := evaluateWithCallstack(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 				return nil, testErr
-			}, ftype.WithLabel(label)), struct{}{}, mockStableCallpathIdentity)
+			}, ftype.WithLabel(label)), struct{}{}, mockStableCallstack)
 			assert.ErrorIs(t, err, ErrEvalFailed)
 			assert.ErrorIs(t, err, testErr)
 			assert.ErrorContains(t, err, label)
