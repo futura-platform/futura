@@ -208,6 +208,30 @@ func TestEncoder_ErrorPaths(t *testing.T) {
 		err := enc.Encode(Container{Items: []Item{{Name: "a"}, {Name: "b"}}})
 		assertErrorContainsPath(t, err, "encode", "root.Items[1].Name")
 	})
+
+	t.Run("unsupported_chan", func(t *testing.T) {
+		type WithChan struct {
+			Ch chan int
+		}
+		var buf bytes.Buffer
+		enc := privateencoding.NewEncoder[WithChan](&buf)
+		err := enc.Encode(WithChan{Ch: make(chan int)})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, privateencoding.ErrUnsupportedType)
+		assert.ErrorContains(t, err, "chan")
+	})
+
+	t.Run("unsupported_func", func(t *testing.T) {
+		type WithFunc struct {
+			Fn func()
+		}
+		var buf bytes.Buffer
+		enc := privateencoding.NewEncoder[WithFunc](&buf)
+		err := enc.Encode(WithFunc{Fn: func() {}})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, privateencoding.ErrUnsupportedType)
+		assert.ErrorContains(t, err, "func")
+	})
 }
 
 // encodeValue encodes a value and returns the bytes
@@ -406,6 +430,211 @@ func TestDecoder_ErrorPaths(t *testing.T) {
 		dec := privateencoding.NewDecoder[Container](newTruncatedReader(data, 4))
 		_, err := dec.Decode()
 		assertErrorContainsPath(t, err, "decode", "root.Items[1].Name")
+	})
+
+	// Tests for aliased scalar types that go through decodeComplex
+	// These types bypass decodeSimple because type aliases don't match concrete types
+
+	t.Run("aliased_string", func(t *testing.T) {
+		type MyString string
+		type Container struct {
+			Value MyString
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_bool", func(t *testing.T) {
+		type MyBool bool
+		type Container struct {
+			Value MyBool
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_int", func(t *testing.T) {
+		type MyInt int
+		type Container struct {
+			Value MyInt
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_uint", func(t *testing.T) {
+		type MyUint uint
+		type Container struct {
+			Value MyUint
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_int8", func(t *testing.T) {
+		type MyInt8 int8
+		type Container struct {
+			Value MyInt8
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_uint8", func(t *testing.T) {
+		type MyUint8 uint8
+		type Container struct {
+			Value MyUint8
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_int16", func(t *testing.T) {
+		type MyInt16 int16
+		type Container struct {
+			Value MyInt16
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_uint16", func(t *testing.T) {
+		type MyUint16 uint16
+		type Container struct {
+			Value MyUint16
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_int32", func(t *testing.T) {
+		type MyInt32 int32
+		type Container struct {
+			Value MyInt32
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_uint32", func(t *testing.T) {
+		type MyUint32 uint32
+		type Container struct {
+			Value MyUint32
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_int64", func(t *testing.T) {
+		type MyInt64 int64
+		type Container struct {
+			Value MyInt64
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_uint64", func(t *testing.T) {
+		type MyUint64 uint64
+		type Container struct {
+			Value MyUint64
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_float32", func(t *testing.T) {
+		type MyFloat32 float32
+		type Container struct {
+			Value MyFloat32
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_float64", func(t *testing.T) {
+		type MyFloat64 float64
+		type Container struct {
+			Value MyFloat64
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("complex64", func(t *testing.T) {
+		type Container struct {
+			Value complex64
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("complex128", func(t *testing.T) {
+		type Container struct {
+			Value complex128
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("aliased_uintptr", func(t *testing.T) {
+		type MyUintptr uintptr
+		type Container struct {
+			Value MyUintptr
+		}
+		dec := privateencoding.NewDecoder[Container](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Value")
+	})
+
+	t.Run("map_value", func(t *testing.T) {
+		type WithMap struct {
+			Map map[string]int
+		}
+		data := encodeValue(t, WithMap{Map: map[string]int{"a": 1}})
+		// nil-check (1 byte) + length (1 byte) + key "a" (2 bytes: fixstr header + 'a')
+		// = 4 bytes, truncate to fail on value
+		dec := privateencoding.NewDecoder[WithMap](newTruncatedReader(data, 4))
+		_, err := dec.Decode()
+		assertErrorContainsPath(t, err, "decode", "root.Map[a]")
+	})
+
+	t.Run("unsupported_chan", func(t *testing.T) {
+		type WithChan struct {
+			Ch chan int
+		}
+		dec := privateencoding.NewDecoder[WithChan](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "unsupported type")
+		assert.ErrorContains(t, err, "chan")
+	})
+
+	t.Run("unsupported_func", func(t *testing.T) {
+		type WithFunc struct {
+			Fn func()
+		}
+		dec := privateencoding.NewDecoder[WithFunc](newTruncatedReader([]byte{}, 0))
+		_, err := dec.Decode()
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "unsupported type")
+		assert.ErrorContains(t, err, "func")
 	})
 }
 

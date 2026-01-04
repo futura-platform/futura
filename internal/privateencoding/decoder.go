@@ -173,7 +173,10 @@ func (d *Decoder[T]) decodeComplex(v reflect.Value, path string) error {
 
 	// handle cases where simple types are aliased, which makes them complex
 	case reflect.String:
-		return mustDecodeSimpleValue[string](d, v)
+		if err := mustDecodeSimpleValue[string](d, v); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
 	case reflect.Bool:
 		if err := mustDecodeSimpleValue[bool](d, v); err != nil {
 			return decodePathError(path, err)
