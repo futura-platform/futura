@@ -77,7 +77,7 @@ func runSerpMonitor(ctx context.Context, term string) error {
 	_, err = futura.Flow(ctx,
 		serpMonitorFlow,
 		term,
-		ftype.WithOnError(func(err error) bool {
+		ftype.WithOnStepError(func(err error) bool {
 			fmt.Println("error:", err)
 			time.Sleep(time.Second)
 			return true
