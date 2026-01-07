@@ -14,10 +14,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func loopAndAssertState[A, T any](t *testing.T, ctx context.Context, callableFlow flow.CallableFlow[A, T], args A, opts ...ftype.FlowLoopOption) (T, error) {
+	r, err := flow.Loop(ctx, callableFlow, args, opts...)
+	f := fcontext.MustFromContext(ctx)
+	assert.Zero(t, f.SequenceIndex())
+	return r, err
+}
+
 func TestLoopFlow(t *testing.T) {
 	t.Run("Basic flow", func(t *testing.T) {
-		ctx := fcontext.WithFlow(t.Context(), nil)
-		rval, err := flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
+		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			return "test", nil
 		}, &struct{}{})
 		assert.NoError(t, err)
@@ -25,8 +32,8 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Flow cancellation", func(t *testing.T) {
-		ctx := fcontext.WithFlow(t.Context(), nil)
-		_, err := flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
+		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			return "", ftype.ErrCancelFlow
 		}, &struct{}{})
 		assert.ErrorIs(t, err, ftype.ErrCancelFlow)
@@ -34,10 +41,10 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("Regular error handling", func(t *testing.T) {
 		testErr := errors.New("test error")
-		ctx := fcontext.WithFlow(t.Context(), nil)
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
 
 		fnCallCount := 0
-		rval, err := flow.Loop(
+		rval, err := loopAndAssertState(t,
 			ctx,
 			func(ctx context.Context, _ *struct{}) (string, error) {
 				fnCallCount++
@@ -54,9 +61,9 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Context error handling", func(t *testing.T) {
-		ctx := fcontext.WithFlow(t.Context(), nil)
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
 		ctx, cancel := context.WithCancel(ctx)
-		_, err := flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			cancel()
 			return "", errors.New("unrelated forever error")
 		}, &struct{}{})
@@ -65,10 +72,10 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("The loop should replay if the replay context was cancelled, even if the callable flow returns without an error", func(t *testing.T) {
-		ctx := fcontext.WithFlow(t.Context(), nil)
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
 		f := fcontext.MustFromContext(ctx)
 		replays := 0
-		rval, err := flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			if replays == 0 {
 				f.RestartCurrentReplay(ctx, errors.New("replay cancelled"))
 			}
@@ -80,7 +87,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Evict cached moments when they are skipped", func(t *testing.T) {
-		ctx := fcontext.WithFlow(t.Context(), nil)
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
 
 		replays := 0
 		fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
@@ -95,7 +102,7 @@ func TestLoopFlow(t *testing.T) {
 		}, ftype.WithLabel("fn2"))
 
 		f := fcontext.MustFromContext(ctx)
-		r, err := flow.Loop(ctx, func(ctx context.Context, _ struct{}) (r string, err error) {
+		r, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ struct{}) (r string, err error) {
 			f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
 				// allow the moment order to change, since we're testing that the moment is evicted.
 				flags.PanicOnMomentOrderChange = false
@@ -122,13 +129,7 @@ func TestLoopFlow(t *testing.T) {
 	t.Run("End to end flow with steps", func(t *testing.T) {
 		errCount := 0
 		expectedErr := errors.New("test error")
-		ctx := fcontext.WithFlow(t.Context(), []ftype.FlowLoopOption{
-			ftype.WithOnStepError(func(err error) (continueExecution bool) {
-				assert.ErrorIs(t, err, expectedErr)
-				errCount++
-				return true
-			}),
-		})
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
 
 		fn1Calls := 0
 		failsTwice := moment.NewFn(func(ctx context.Context, _ *any) (string, error) {
@@ -143,7 +144,7 @@ func TestLoopFlow(t *testing.T) {
 			return "fn2", nil
 		}, ftype.WithLabel("fn2"))
 
-		rval, err := flow.Loop(ctx, func(ctx context.Context, _ *any) (string, error) {
+		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *any) (string, error) {
 			// todo: make this include a conditional branch to cover moment eviction.
 			r1, _, err := step.Evaluate(ctx, failsTwice, nil)
 			if err != nil {
@@ -155,7 +156,11 @@ func TestLoopFlow(t *testing.T) {
 				return "", err
 			}
 			return r1 + r2, nil
-		}, nil)
+		}, nil, ftype.WithOnStepError(func(err error) (continueExecution bool) {
+			assert.ErrorIs(t, err, expectedErr)
+			errCount++
+			return true
+		}))
 		assert.NoError(t, err)
 		assert.Equal(t, "fn1fn2", rval)
 		assert.Equal(t, 2, errCount)
@@ -166,21 +171,17 @@ func TestLoopFlow(t *testing.T) {
 		const collidingKey = "collidingKey"
 		wrapper1Value := "wrapper1"
 		wrapper2Value := "wrapper2"
-		ctx := fcontext.WithFlow(t.Context(), []ftype.FlowLoopOption{
-			func(flo *ftype.FlowLoopOptions) {
-				flo.ContextWrappers = append(flo.ContextWrappers, func(ctx context.Context) context.Context {
-					return context.WithValue(ctx, collidingKey, wrapper1Value)
-				})
-			},
-			func(flo *ftype.FlowLoopOptions) {
-				flo.ContextWrappers = append(flo.ContextWrappers, func(ctx context.Context) context.Context {
-					return context.WithValue(ctx, collidingKey, wrapper2Value)
-				})
-			},
-		})
-		flow.Loop(ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
+		loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			assert.Equal(t, wrapper2Value, ctx.Value(collidingKey))
 			return "test", nil
-		}, &struct{}{})
+		}, &struct{}{},
+			func(ctx context.Context) context.Context {
+				return context.WithValue(ctx, collidingKey, wrapper1Value)
+			},
+			func(ctx context.Context) context.Context {
+				return context.WithValue(ctx, collidingKey, wrapper2Value)
+			},
+		)
 	})
 }

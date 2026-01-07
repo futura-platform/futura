@@ -21,7 +21,7 @@ func TestWithOnError(t *testing.T) {
 		}
 		testErr := errors.New("test error")
 		replays := 0
-		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		r, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			replays++
 			_, err := futura.Step(b, func(ctx context.Context, args *any) (string, error) {
 				return "", testErr
@@ -47,7 +47,7 @@ func TestWithOnError(t *testing.T) {
 			return false
 		}
 		testErr := errors.New("test error")
-		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		r, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			_, err := futura.Step(b, func(ctx context.Context, args *any) (string, error) {
 				return "", testErr
 			}, nil)
@@ -68,7 +68,7 @@ func TestWithLogger(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		}))
-		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		r, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			err := futura.Effect(b, func(ctx context.Context, args *any) error { return nil }, nil)
 			if err != nil {
 				return "failed", err

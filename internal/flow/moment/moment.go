@@ -5,16 +5,15 @@ import (
 	"runtime"
 
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
-	"github.com/futura-platform/futura/internal/utils"
 )
 
 // A Moment represents an Fn instance and its returned successful output at a specific point in time.
 // This is separate from the actual Identifier of the specific point in time. That is represented by Identity.
 type Moment struct {
-	callableRef anyFn
-	input       any
-	output      any
-	invalidated bool
+	callableName string
+	input        any
+	output       any
+	invalidated  bool
 }
 
 type anyFn interface {
@@ -23,7 +22,7 @@ type anyFn interface {
 }
 
 func NewMoment[A comparable](callable anyFn, input A) *Moment {
-	return &Moment{callableRef: callable, input: input}
+	return &Moment{callableName: callable.runtimeFunc().Name(), input: input}
 }
 
 // Validate validates the moment against the new input.
@@ -32,14 +31,14 @@ func NewMoment[A comparable](callable anyFn, input A) *Moment {
 // againstFn must be a function, this should not change between replays for each moment.
 func (m Moment) Validate(index int, againstFn anyFn, input any, identity Identity) (valid bool) {
 	// check if the new fn is diverging from the existing moment's fn
-	againstFnRef := againstFn.runtimeFunc()
-	oldMomentFnRef := m.callableRef.runtimeFunc()
-	if againstFnRef != oldMomentFnRef {
+	againstFnName := againstFn.runtimeFunc().Name()
+	oldMomentFnName := m.callableName
+	if againstFnName != oldMomentFnName {
 		panic(ftrerrors.InconsistentStateError(MomentFnChangeError{
-			Index:          index,
-			OldMomentFnRef: m.callableRef,
-			NewMomentFnRef: againstFn,
-			Identity:       identity,
+			Index:           index,
+			OldMomentFnName: oldMomentFnName,
+			NewMomentFnName: againstFnName,
+			Identity:        identity,
 		}))
 	}
 	return m.input == input && !m.invalidated
@@ -60,31 +59,31 @@ func (m *Moment) Invalidate() {
 // identities should always lead to the same fn. If they don't, this error is thrown.
 // something like passing the moment fn function as a variable value that changes between replays to a step call would cause this.
 type MomentFnChangeError struct {
-	utils.Donotcompare
-	Index                          int
-	Identity                       Identity
-	OldMomentFnRef, NewMomentFnRef anyFn
+	// utils.Donotcompare
+	Index                            int
+	Identity                         Identity
+	OldMomentFnName, NewMomentFnName string
 }
 
-func (e MomentFnChangeError) Is(target error) bool {
-	t, ok := target.(MomentFnChangeError)
-	if !ok {
-		return false
-	}
+// func (e MomentFnChangeError) Is(target error) bool {
+// 	t, ok := target.(MomentFnChangeError)
+// 	if !ok {
+// 		return false
+// 	}
 
-	return e.Index == t.Index &&
-		e.Identity == t.Identity &&
-		e.OldMomentFnRef.runtimeFunc() == t.OldMomentFnRef.runtimeFunc() &&
-		e.NewMomentFnRef.runtimeFunc() == t.NewMomentFnRef.runtimeFunc()
-}
+// 	return e.Index == t.Index &&
+// 		e.Identity == t.Identity &&
+// 		e.OldMomentFnName == t.OldMomentFnName &&
+// 		e.NewMomentFnName == t.NewMomentFnName
+// }
 
 func (e MomentFnChangeError) Error() string {
 	return fmt.Sprintf(
 		// "func of the existing moment does not match the func of the current moment (moment[%d]): %s != %s (old != new)",
 		"func of moment[%d] changed: %s != %s (old != new) @ %s",
 		e.Index,
-		e.OldMomentFnRef.Label(),
-		e.NewMomentFnRef.Label(),
+		e.OldMomentFnName,
+		e.NewMomentFnName,
 		e.Identity,
 	)
 }

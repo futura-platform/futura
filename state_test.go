@@ -11,7 +11,7 @@ import (
 
 func TestState(t *testing.T) {
 	t.Run("no initial value implies the default to be the type's zero value", func(t *testing.T) {
-		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State[int](b)
 			return state.V(), nil
 		}, struct{}{})
@@ -19,7 +19,7 @@ func TestState(t *testing.T) {
 		assert.Equal(t, 0, r)
 	})
 	t.Run("an initial value can be provided", func(t *testing.T) {
-		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 1)
 			return state.V(), nil
 		}, struct{}{})
@@ -33,7 +33,7 @@ func TestState(t *testing.T) {
 	})
 	t.Run("setState does not trigger a replay if the new value is the same as the current value", func(t *testing.T) {
 		replays := 0
-		futura.Flow(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			replays++
 			state := futura.State(b, 1)
 			state.Set(1)
@@ -42,7 +42,7 @@ func TestState(t *testing.T) {
 		assert.Equal(t, 1, replays)
 	})
 	t.Run("setState updates the state and immediately triggers a replay for a new value", func(t *testing.T) {
-		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 1)
 			state.Set(2)
 			return state.V(), nil
@@ -64,7 +64,7 @@ func TestState(t *testing.T) {
 			}
 			return fn2Calls, nil
 		}
-		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 0)
 
 			var r1, r2 int

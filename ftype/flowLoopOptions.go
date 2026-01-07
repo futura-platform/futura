@@ -10,25 +10,17 @@ import (
 	stepwrapper "github.com/futura-platform/futura/internal/step/wrapper"
 )
 
-type FlowLoopOptions struct {
-	ContextWrappers []func(context.Context) context.Context
-}
-
-type FlowLoopOption func(*FlowLoopOptions)
+type FlowLoopOption func(context.Context) context.Context
 
 func WithLogger(logger *slog.Logger) FlowLoopOption {
-	return func(opts *FlowLoopOptions) {
-		opts.ContextWrappers = append(opts.ContextWrappers, func(ctx context.Context) context.Context {
-			return flog_internal.WithLogger(ctx, logger)
-		})
+	return func(ctx context.Context) context.Context {
+		return flog_internal.WithLogger(ctx, logger)
 	}
 }
 
 func WithStepWrapper(wrapper stepwrapper.StepWrapper) FlowLoopOption {
-	return func(opts *FlowLoopOptions) {
-		opts.ContextWrappers = append(opts.ContextWrappers, func(ctx context.Context) context.Context {
-			return stepwrapper.With(ctx, wrapper)
-		})
+	return func(ctx context.Context) context.Context {
+		return stepwrapper.With(ctx, wrapper)
 	}
 }
 

@@ -1,6 +1,7 @@
 package privateencoding
 
 import (
+	"encoding"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"math"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vmihailenco/msgpack/v5"
@@ -66,9 +68,44 @@ func (e *Encoder[T]) encodeSimple(data any) (err error, isSimple bool) {
 	}
 }
 
+var binaryMarshalerType = reflect.TypeOf((*encoding.BinaryMarshaler)(nil)).Elem()
+
+func implementsBinaryMarshaler(v reflect.Value) (func() encoding.BinaryMarshaler, bool) {
+	// gob should handle interface serialization, so we don't need to handle it here
+	// if t.Kind() == reflect.Interface && !v.IsNil() {
+	// 	v = v.Elem()
+	// }
+	return func() encoding.BinaryMarshaler {
+		return v.Interface().(encoding.BinaryMarshaler)
+	}, v.Type().Implements(binaryMarshalerType)
+}
+
+var anyType = reflect.TypeOf((*any)(nil)).Elem()
+
 func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 	uv := privateencodinginternal.UnsafeValue(v)
+
+	if getMarshaler, ok := implementsBinaryMarshaler(uv); ok {
+		data, err := getMarshaler().MarshalBinary()
+		if err != nil {
+			return encodePathError(path, err)
+		}
+		if err := e.mustEncodeSimple(len(data)); err != nil {
+			return encodePathError(path+".len", err)
+		} else if _, err := e.w.Write(data); err != nil {
+			return encodePathError(path+".data", err)
+		}
+		return nil
+	}
 	if uv.Kind() == reflect.Interface {
+		// register types for gob jit at runtime
+
+		if !uv.IsNil() && ((uv.Type() == anyType) ||
+			(uv.Type().PkgPath() == "github.com/futura-platform/futura/ftype/seal" &&
+				strings.HasPrefix(uv.Type().Name(), "Sealed["))) {
+			jitGobRegister(uv.Elem())
+		}
+
 		// let gob handle interface serialization
 		return encodePathError(path, e.interfaceEncoder.EncodeValue(uv))
 	}

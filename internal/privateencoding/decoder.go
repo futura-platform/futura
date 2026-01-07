@@ -1,6 +1,7 @@
 package privateencoding
 
 import (
+	"encoding"
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
@@ -64,8 +65,39 @@ func (d *Decoder[T]) mustDecodeSimple(v any) error {
 	return nil
 }
 
+var binaryUnmarshalerType = reflect.TypeOf((*encoding.BinaryUnmarshaler)(nil)).Elem()
+
+func implementsBinaryUnmarshaler(v reflect.Value) (func() encoding.BinaryUnmarshaler, bool) {
+	t := v.Type()
+	if t.Kind() == reflect.Interface && !v.IsNil() {
+		v = v.Elem()
+	}
+	if v.CanAddr() && v.Addr().Type().Implements(binaryUnmarshalerType) {
+		return func() encoding.BinaryUnmarshaler {
+			return v.Addr().Interface().(encoding.BinaryUnmarshaler)
+		}, true
+	}
+	return func() encoding.BinaryUnmarshaler {
+		return v.Interface().(encoding.BinaryUnmarshaler)
+	}, v.Type().Implements(binaryUnmarshalerType)
+}
+
 func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 	uv := privateencodinginternal.UnsafeValue(v)
+	if getUnmarshaler, ok := implementsBinaryUnmarshaler(uv); ok {
+		var size int
+		if err := d.mustDecodeSimple(&size); err != nil {
+			return decodePathError(path, err)
+		}
+		data := make([]byte, size)
+		if _, err := io.ReadFull(d.r, data); err != nil {
+			return decodePathError(path, err)
+		}
+		if err := getUnmarshaler().UnmarshalBinary(data); err != nil {
+			return decodePathError(path, err)
+		}
+		return nil
+	}
 	if uv.Kind() == reflect.Interface {
 		if err := d.interfaceDecoder.DecodeValue(uv); err != nil {
 			return decodePathError(path, err)

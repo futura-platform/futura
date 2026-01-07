@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/futura-platform/futura/ftype/seal"
 	"github.com/futura-platform/futura/internal/privateencoding"
 	"github.com/futura-platform/futura/internal/privateencoding/internal/otherpackage"
 	"github.com/stretchr/testify/assert"
@@ -209,48 +210,73 @@ func TestCodec(t *testing.T) {
 	t.Run("custom_encoder_decoder", func(t *testing.T) {
 		var customEncoderDecoder myInterface = &myImplementation{SomeField: "test"}
 		gob.Register(&myImplementation{})
-		applyCodecThenCompare(t, customEncoderDecoder)
+		applyCodecThenCompare(t, customEncoderDecoder, nil)
 	})
 
 	// misc standard library types
 	t.Run("time.Time", func(t *testing.T) {
 		time_ := time.Now()
-		codecTest(time_)(t)
+		applyCodecThenCompare(t, time_, func(a, b time.Time) bool { return a.Equal(b) })
 	})
 	t.Run("cookiejar.Jar", func(t *testing.T) {
 		cookieJar, err := cookiejar.New(nil)
 		assert.NoError(t, err)
-		cookieJar.SetCookies(
-			&url.URL{
-				Scheme: "https",
-				Host:   "example.com",
-			},
-			[]*http.Cookie{{Name: "test", Value: "test"}},
-		)
-		codecTest(cookieJar)(t)
+		u := &url.URL{
+			Scheme: "https",
+			Host:   "example.com",
+		}
+		cookieJar.SetCookies(u, []*http.Cookie{{Name: "test", Value: "test"}})
+		applyCodecThenCompare(t, cookieJar, func(a, b *cookiejar.Jar) bool {
+			return reflect.DeepEqual(a.Cookies(u), b.Cookies(u))
+		})
+	})
+
+	// jit register sealed types
+	t.Run("jit_register_sealed_types", func(t *testing.T) {
+		a := seal.Seal(1)
+		applyCodecThenCompare(t, a, nil)
+
+		b := seal.Seal("b")
+		applyCodecThenCompare(t, b, nil)
+
+		c := seal.Seal(struct{ A int }{A: 1})
+		applyCodecThenCompare(t, c, nil)
+
+		d := seal.Seal(map[string]int{"a": 1})
+		applyCodecThenCompare(t, d, nil)
+	})
+
+	// any casted
+	t.Run("any_casted", func(t *testing.T) {
+		a := any(1)
+		applyCodecThenCompare(t, a, nil)
 	})
 }
 
 func codecTest[T any](value T) func(t *testing.T) {
 	return func(t *testing.T) {
 		t.Run("direct", func(t *testing.T) {
-			applyCodecThenCompare(t, value)
+			applyCodecThenCompare(t, value, nil)
 		})
 		t.Run("in_struct", func(t *testing.T) {
 			testStruct := *otherpackage.NewCodecTestStruct(value)
-			applyCodecThenCompare(t, testStruct)
+			applyCodecThenCompare(t, testStruct, nil)
 		})
 		t.Run("type_alias", func(t *testing.T) {
 			type MyType = T
-			applyCodecThenCompare(t, MyType(value))
+			applyCodecThenCompare(t, MyType(value), nil)
 		})
 	}
 }
 
-func applyCodecThenCompare[T any](t *testing.T, value T) {
+func applyCodecThenCompare[T any](t *testing.T, value T, compareOverride func(T, T) bool) {
+	compare := compareOverride
+	if compare == nil {
+		compare = func(a, b T) bool { return reflect.DeepEqual(a, b) }
+	}
 	result, err := applyCodec(value)
 	assert.NoError(t, err)
-	assert.True(t, reflect.DeepEqual(value, result), diff.ObjectGoPrintSideBySide(value, result))
+	assert.True(t, compare(value, result), diff.ObjectGoPrintSideBySide(value, result))
 }
 
 func applyCodec[T any](value T) (T, error) {

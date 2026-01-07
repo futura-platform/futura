@@ -1,9 +1,11 @@
-package ftype
+package seal
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
+	"github.com/futura-platform/futura/internal/privateencoding"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -46,4 +48,20 @@ func testForValue[T any](t *testing.T, value T) {
 		// assert deep equality
 		assert.Equal(t, value, sealedA.V())
 	})
+}
+
+func TestSealCanBeSerializedAndDeserialized(t *testing.T) {
+	sealed := Seal(1)
+	buf := bytes.NewBuffer(nil)
+	encoder := privateencoding.NewEncoder[Sealed[int]](buf)
+
+	err := encoder.Encode(sealed)
+	assert.NoError(t, err)
+
+	decoder := privateencoding.NewDecoder[Sealed[int]](buf)
+	deserialized, err := decoder.Decode()
+	assert.NoError(t, err)
+	assert.Equal(t, sealed, deserialized)
+	assert.Equal(t, sealed.V(), deserialized.V())
+	assert.Equal(t, 1, deserialized.V())
 }

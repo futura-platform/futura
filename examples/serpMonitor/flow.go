@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/futura-platform/futura"
-	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/ftype/seal"
 )
 
 func serpMonitorFlow(b futura.FlowBuilder, term string) ([]serpEntry, error) {
@@ -20,7 +20,7 @@ func serpMonitorFlow(b futura.FlowBuilder, term string) ([]serpEntry, error) {
 		sessionValid.Set(true)
 	}
 
-	var lastRankings ftype.Sealed[serpRankings]
+	var lastRankings seal.Sealed[serpRankings]
 	for i := 0; ; func() { i++; time.Sleep(time.Second) }() {
 		b := b.WithKey(i)
 		newRankings, err := futura.Step(b, fetchRankings, fetchRankingsParams{

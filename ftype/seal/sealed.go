@@ -1,7 +1,8 @@
-package ftype
+package seal
 
 import (
 	"bytes"
+	"encoding/gob"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -17,6 +18,28 @@ type sealedWithString[T any] struct {
 	// The serialized value of the input value.
 	// It is a string so that it is comparable.
 	comparableSerialized string
+}
+
+// var _ encoding.BinaryMarshaler = sealedWithString[any]{}
+// var _ encoding.BinaryUnmarshaler = (*sealedWithString[any])(nil)
+
+// func (s sealedWithString[T]) MarshalBinary() ([]byte, error) {
+// 	return []byte(s.comparableSerialized), nil
+// }
+// func (s *sealedWithString[T]) UnmarshalBinary(data []byte) error {
+// 	s.comparableSerialized = string(data)
+// 	return nil
+// }
+
+var _ gob.GobEncoder = sealedWithString[any]{}
+var _ gob.GobDecoder = &sealedWithString[any]{}
+
+func (s sealedWithString[T]) GobEncode() ([]byte, error) {
+	return []byte(s.comparableSerialized), nil
+}
+func (s *sealedWithString[T]) GobDecode(data []byte) error {
+	s.comparableSerialized = string(data)
+	return nil
 }
 
 // Seal creates a read only, "sealed" value for any input value.

@@ -8,57 +8,58 @@ import (
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/futura-platform/futura/flog"
-	"github.com/futura-platform/futura/ftype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/utils"
 	"github.com/petermattis/goid"
 )
 
 type ctxKey string
 
-const flowContextKey ctxKey = "futura_flow"
+const flowExecutionKey ctxKey = "futura_flow"
 
 type ReplayFlags struct {
 	PanicOnMomentOrderChange bool
 }
-type flowContext struct {
-	options            []ftype.FlowLoopOption
+type FlowExecution struct {
 	replayFlags        ReplayFlags
 	creatorGoroutineID int64
-
-	cancelCurrentReplay context.CancelCauseFunc
 
 	// the current state of the flow.
 	stateCache map[moment.Identity]*moment.Moment
 	// this includes the callpaths that have not been seen yet in the current replay.
-	unseenCachedCallpaths mapset.Set[moment.Identity]
+	unseenCachedCallpaths utils.SerializableSet[moment.Identity]
 
 	// given a certain state, this sequence should be deterministic.
 	callOrder     []moment.Identity
 	sequenceIndex int
 }
 
-func WithFlow(ctx context.Context, options []ftype.FlowLoopOption) context.Context {
-	return context.WithValue(ctx, flowContextKey, &flowContext{
-		options:            options,
+// NewFlowExecution creates a new flow execution bound to the current goroutine.
+func NewFlowExecution() *FlowExecution {
+	return &FlowExecution{
 		creatorGoroutineID: goid.Get(),
 		stateCache:         make(map[moment.Identity]*moment.Moment),
-	})
+	}
 }
 
-func (f *flowContext) Options() []ftype.FlowLoopOption {
-	return f.options
+func WithFlow(ctx context.Context, exec *FlowExecution) context.Context {
+	if exec == nil {
+		panic("flow execution cannot be nil")
+	}
+	return context.WithValue(ctx, flowExecutionKey, exec)
 }
 
-func (f *flowContext) Rewind() {
+func (f *FlowExecution) Rewind() {
 	f.sequenceIndex = 0
 }
 
-func (f *flowContext) SequenceIndex() int {
+func (f *FlowExecution) SequenceIndex() int {
 	return f.sequenceIndex
 }
 
-func (f *flowContext) EvictUnseenCachedStates(ctx context.Context) {
+func (f *FlowExecution) EvictUnseenCachedStates(ctx context.Context) {
 	l := flog.FromContext(ctx)
 	for identity := range mapset.Elements(f.unseenCachedCallpaths) {
 		delete(f.stateCache, identity)
@@ -78,8 +79,8 @@ var (
 // RestartCurrentReplay cancels the current replay, which will always start a new one.
 // (Regardless of whether or not the last replay was successful).
 // This will also skip the default end of replay behavior, including rewinding the sequence index and resetting the replay flags.
-func (f *flowContext) RestartCurrentReplay(ctx context.Context, cause error) {
-	if f.cancelCurrentReplay == nil {
+func (f *FlowExecution) RestartCurrentReplay(ctx context.Context, cause error) {
+	if !replay.Has(ctx) {
 		panic(ftrerrors.InconsistentStateError(ErrNoCurrentReplay))
 	} else if cause == nil {
 		panic(ftrerrors.InconsistentStateError(ErrNilCancellationCause))
@@ -88,32 +89,30 @@ func (f *flowContext) RestartCurrentReplay(ctx context.Context, cause error) {
 	l.LogAttrs(ctx, slog.LevelDebug, "restarting replay",
 		slog.String("cause", cause.Error()),
 	)
-	f.cancelCurrentReplay(fmt.Errorf("%w: %w", ErrRestartReplay, cause))
+	replay.Cancel(ctx, fmt.Errorf("%w: %w", ErrRestartReplay, cause))
 }
 
-func (f *flowContext) StartNewReplay(ctx context.Context) (context.Context, context.CancelCauseFunc) {
+func (f *FlowExecution) StartNewReplay(ctx context.Context) context.Context {
 	f.resetUnseenCachedCallpaths()
-	replayCtx, cancel := context.WithCancelCause(ctx)
-	f.cancelCurrentReplay = cancel
-	return replayCtx, cancel
+	return replay.With(ctx)
 }
 
-func (f *flowContext) resetUnseenCachedCallpaths() {
-	f.unseenCachedCallpaths = mapset.NewSetWithSize[moment.Identity](len(f.stateCache))
+func (f *FlowExecution) resetUnseenCachedCallpaths() {
+	f.unseenCachedCallpaths = utils.NewSerializableSet(mapset.NewSetWithSize[moment.Identity](len(f.stateCache)))
 	for callpath := range f.stateCache {
 		f.unseenCachedCallpaths.Add(callpath)
 	}
 }
 
-func (f *flowContext) ReplayFlags() ReplayFlags {
+func (f *FlowExecution) ReplayFlags() ReplayFlags {
 	return f.replayFlags
 }
 
-func (f *flowContext) SetReplayFlags(flags func(flags *ReplayFlags)) {
+func (f *FlowExecution) SetReplayFlags(flags func(flags *ReplayFlags)) {
 	flags(&f.replayFlags)
 }
 
-func (f *flowContext) ExpectedIdentity() (moment.Identity, bool) {
+func (f *FlowExecution) ExpectedIdentity() (moment.Identity, bool) {
 	if f.sequenceIndex > len(f.callOrder) {
 		panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
 			sequenceIndex:  f.sequenceIndex,
@@ -127,18 +126,18 @@ func (f *flowContext) ExpectedIdentity() (moment.Identity, bool) {
 	return identity, true
 }
 
-func (f *flowContext) GetMoment(identity moment.Identity) (*moment.Moment, bool) {
+func (f *FlowExecution) GetMoment(identity moment.Identity) (*moment.Moment, bool) {
 	moment, ok := f.stateCache[identity]
 	return moment, ok
 }
 
-func (f *flowContext) InvalidateMoment(identity moment.Identity) {
+func (f *FlowExecution) InvalidateMoment(identity moment.Identity) {
 	delete(f.stateCache, identity)
 }
 
 // RecordCurrentMoment stores the current identity+moment (growing the sequence slice if necessary)
 // it also marks the identity as seen.
-func (f *flowContext) RecordCurrentMoment(identity moment.Identity, currentMoment *moment.Moment) {
+func (f *FlowExecution) RecordCurrentMoment(identity moment.Identity, currentMoment *moment.Moment) {
 	if f.sequenceIndex > len(f.callOrder) {
 		panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
 			sequenceIndex:  f.sequenceIndex,
@@ -160,14 +159,14 @@ func (f *flowContext) RecordCurrentMoment(identity moment.Identity, currentMomen
 }
 
 // Advance advances the sequence index by 1.
-func (f *flowContext) Advance() {
+func (f *FlowExecution) Advance() {
 	f.sequenceIndex++
 }
 
 // FromContext retrieves the flow context from the context.
 // It will panic if this is being used in a goroutine other than the one that created the context.
-func FromContext(ctx context.Context) (*flowContext, bool) {
-	v, ok := ctx.Value(flowContextKey).(*flowContext)
+func FromContext(ctx context.Context) (*FlowExecution, bool) {
+	v, ok := ctx.Value(flowExecutionKey).(*FlowExecution)
 	if ok && v.creatorGoroutineID != goid.Get() {
 		panic(ftrerrors.InconsistentStateError(FlowContextUsedInWrongGoroutineError{
 			createdInGoroutineID: v.creatorGoroutineID,
@@ -179,7 +178,7 @@ func FromContext(ctx context.Context) (*flowContext, bool) {
 
 var ErrFlowContextNotFound = errors.New("flowContext not found in context")
 
-func MustFromContext(ctx context.Context) *flowContext {
+func MustFromContext(ctx context.Context) *FlowExecution {
 	f, ok := FromContext(ctx)
 	if !ok {
 		panic(ErrFlowContextNotFound)

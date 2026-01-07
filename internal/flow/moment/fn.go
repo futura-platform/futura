@@ -17,7 +17,7 @@ type Fn[A any, R any] struct {
 	// in the same flowContext.memoizedMomentSequence.
 	// this might occur if a flow loop is used with a wrapper function that calls the actual flow function, like this:
 	/*
-		futura.Flow(ctx, func(ctx context.Context, args A) error {
+		futura.NewFlow(ctx, func(ctx context.Context, args A) error {
 			return actualFlowFunction(ctx, args)
 		}, args)
 	*/

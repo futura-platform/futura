@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/ftype/seal"
 )
 
 // Identity is a unique identifier for a moment.
@@ -17,17 +17,17 @@ import (
 // "key" is assigned through context, so that api consumers can have the ability to encapsulate logic that doesn't need to know about the key.
 // (like a helper function that could be called inside or out of a loop)
 type Identity struct {
-	callpath ftype.Sealed[Callpath]
+	callpath seal.Sealed[Callpath]
 	key      any
 }
 
-func (i Identity) Callpath() ftype.Sealed[Callpath] {
+func (i Identity) Callpath() seal.Sealed[Callpath] {
 	return i.callpath
 }
 
 func NewIdentity(ctx context.Context, callpath Callpath) Identity {
 	return Identity{
-		callpath: ftype.Seal(callpath),
+		callpath: seal.Seal(callpath),
 		key:      IdentityFromContext(ctx),
 	}
 }

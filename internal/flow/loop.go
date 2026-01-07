@@ -9,22 +9,20 @@ import (
 	"github.com/futura-platform/futura/internal/flow/replay"
 )
 
-type callableFlow[A, T any] func(ctx context.Context, args A) (T, error)
+type CallableFlow[A, T any] func(ctx context.Context, args A) (T, error)
 
 // Loop implements the core logic of the flow. It is responsible for:
 // - executing the flow fn
 // - handling errors
 // - rewinding the sequence
-func Loop[A, T any](ctx context.Context, callableFlow callableFlow[A, T], args A) (T, error) {
+func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A, opts ...ftype.FlowLoopOption) (T, error) {
 	f := fcontext.MustFromContext(ctx)
-	opts := &ftype.FlowLoopOptions{}
-	for _, option := range f.Options() {
-		option(opts)
+	for _, opt := range opts {
+		ctx = opt(ctx)
 	}
 
-	for _, contextWrapper := range opts.ContextWrappers {
-		ctx = contextWrapper(ctx)
-	}
+	// ALWAYS rewind the flow at the end of the loop, so that the execution state is context switch safe once this function returns.
+	defer f.Rewind()
 
 	for ; ; func() {
 		f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
@@ -34,9 +32,10 @@ func Loop[A, T any](ctx context.Context, callableFlow callableFlow[A, T], args A
 		f.EvictUnseenCachedStates(ctx)
 	}() {
 	restartReplay:
-		replayCtx, cancel := f.StartNewReplay(ctx)
+		replayCtx := f.StartNewReplay(ctx)
 		result, err := replay.Execute(replayCtx, callableFlow, args)
-		cancel(nil)
+		replay.Cancel(replayCtx, nil)
+
 		if ctx.Err() != nil {
 			// if the context is done, comply by returning immediately
 			return result, ctx.Err()

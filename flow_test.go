@@ -3,8 +3,10 @@ package futura_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/futura-platform/futura"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
@@ -15,9 +17,11 @@ import (
 
 func TestFlow(t *testing.T) {
 	t.Run("do not call Flow from within a flow", func(t *testing.T) {
-		ctx := fcontext.WithFlow(t.Context(), nil)
-		_, err := futura.Flow(ctx, func(b futura.FlowBuilder, _ *any) (string, error) {
-			futura.Flow(b, func(b futura.FlowBuilder, _ *any) (string, error) {
+		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
+		f1 := futura.NewFlow[*any, string]()
+		f2 := futura.NewFlow[*any, string]()
+		_, err := f1.Execute(ctx, func(b futura.FlowBuilder, _ *any) (string, error) {
+			f2.Execute(ctx, func(b futura.FlowBuilder, _ *any) (string, error) {
 				return "never reached 1", nil
 			}, nil)
 			return "never reached 2", nil
@@ -26,14 +30,14 @@ func TestFlow(t *testing.T) {
 	})
 	t.Run("Flow recovers from panics", func(t *testing.T) {
 		var expectedErr = errors.New("expected panic")
-		_, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		_, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic(expectedErr)
 		}, nil)
 		assert.ErrorIs(t, err, futura.ErrFlowPanic)
 		assert.ErrorIs(t, err, expectedErr)
 	})
 	t.Run("Flow recovers from panics with non-error values", func(t *testing.T) {
-		_, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		_, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic("not an error type")
 		}, nil)
 		assert.ErrorIs(t, err, futura.ErrFlowPanic)
@@ -48,8 +52,8 @@ func TestFlow(t *testing.T) {
 	}
 	checkMultipleMomentFunctions := func(t *testing.T, onUseFn1 func(futura.FlowBuilder) futura.FlowBuilder, onUseFn2 func(futura.FlowBuilder) futura.FlowBuilder) (string, error) {
 		replayCount := 0
-		r, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
-			var vfn futura.ComparableMoment[*any, string]
+		r, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+			var vfn futura.ComparableMomentFn[*any, string]
 			if replayCount == 0 {
 				vfn = fn1
 				if onUseFn1 != nil {
@@ -72,10 +76,10 @@ func TestFlow(t *testing.T) {
 		_, file, _, _ := runtime.Caller(0)
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
 		assert.ErrorIs(t, err, moment.MomentFnChangeError{
-			Index:          0,
-			Identity:       moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 65}}),
-			OldMomentFnRef: moment.NewFn(fn1),
-			NewMomentFnRef: moment.NewFn(fn2),
+			Index:           0,
+			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 69}}),
+			OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
+			NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
 		})
 	})
 	t.Run("A single keyed moment identity should be able to be used with multiple moment functions", func(t *testing.T) {
@@ -94,15 +98,76 @@ func TestFlow(t *testing.T) {
 			execCount++
 			return nil
 		}
-		_, err := futura.Flow(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
-			for i := range expectedExecCount {
-				b = b.WithKey(i)
-				err := futura.Effect(b, fn, nil)
-				assert.NoError(t, err)
-			}
-			return "", nil
-		}, nil)
+		_, err := futura.NewFlow[*any, string]().
+			Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+				for i := range expectedExecCount {
+					b = b.WithKey(i)
+					err := futura.Effect(b, fn, nil)
+					assert.NoError(t, err)
+				}
+				return "", nil
+			}, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, expectedExecCount, execCount)
+	})
+	t.Run("Flow can be serialized and deserialized, so that the execution state resumes from where it left off", func(t *testing.T) {
+		step1Called := make(chan struct{})
+		defer close(step1Called)
+
+		step1Calls := 0
+		step2Calls := 0
+
+		step1 := func(_ context.Context, _ struct{}) (string, error) {
+			step1Calls++
+			step1Called <- struct{}{}
+			return "step1", nil
+		}
+		step2 := func(_ context.Context, _ struct{}) (string, error) {
+			step2Calls++
+			return "step2", nil
+		}
+		flowFn := func(b futura.FlowBuilder, _ *any) (string, error) {
+			r1, err := futura.Step(b, step1, struct{}{})
+			if err != nil {
+				return "", err
+			}
+			// give the context time to be cancelled
+			time.Sleep(time.Millisecond * 100)
+			r2, err := futura.Step(b, step2, struct{}{})
+			if err != nil {
+				return "", err
+			}
+			return r1 + r2, nil
+		}
+
+		// perform the first execution
+		f1 := futura.NewFlow[*any, string]()
+
+		firstExecutionContext, cancelFirstExecution := context.WithCancel(t.Context())
+		defer cancelFirstExecution()
+
+		go func() {
+			<-step1Called
+			cancelFirstExecution()
+		}()
+
+		_, err := f1.Execute(firstExecutionContext, flowFn, nil)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, 1, step1Calls)
+		assert.Equal(t, 0, step2Calls)
+
+		// simulate a context switch
+		serializedFlow, err := f1.Serialize()
+		assert.NoError(t, err)
+		f2, err := futura.NewFlowFromSerialized[*any, string](serializedFlow)
+		assert.NoError(t, err)
+
+		assert.Equal(t, f1, f2)
+
+		// resume the execution
+		_, err = f2.Execute(t.Context(), flowFn, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, step1Calls)
+		assert.Equal(t, 1, step2Calls)
 	})
 }

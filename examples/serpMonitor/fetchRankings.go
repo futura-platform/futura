@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/ftype/seal"
 )
 
 type serpEntry struct {
@@ -23,7 +23,7 @@ type fetchRankingsParams struct {
 	sessionValid bool
 }
 
-func fetchRankings(ctx context.Context, p fetchRankingsParams) (ftype.Sealed[serpRankings], error) {
+func fetchRankings(ctx context.Context, p fetchRankingsParams) (seal.Sealed[serpRankings], error) {
 	httpClient := useHttpClient(ctx)
 	request, err := http.NewRequest("GET", "https://www.google.com/search?q="+p.term, nil)
 	if err != nil {
@@ -79,5 +79,5 @@ func fetchRankings(ctx context.Context, p fetchRankingsParams) (ftype.Sealed[ser
 		}
 	}
 
-	return ftype.Seal(topLevelSearchResults), nil
+	return seal.Seal(topLevelSearchResults), nil
 }

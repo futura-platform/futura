@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
+	"reflect"
+	"runtime"
 	"testing"
 
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
@@ -39,21 +41,21 @@ func TestValidate(t *testing.T) {
 		})
 	})
 	t.Run("fatal divergence case", func(t *testing.T) {
-		fn1 := moment.NewFn(func(ctx context.Context, args int) (int, error) {
+		fn1 := func(ctx context.Context, args int) (int, error) {
 			return args, nil
-		})
-		fn2 := moment.NewFn(func(ctx context.Context, args int) (int, error) {
+		}
+		fn2 := func(ctx context.Context, args int) (int, error) {
 			return args, nil
-		})
-		moment1 := moment.NewMoment(fn1, 1)
+		}
+		moment1 := moment.NewMoment(moment.NewFn(fn1), 1)
 		identity := moment.NewIdentity(t.Context(), moment.Callpath{{File: "placeholder"}})
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(moment.MomentFnChangeError{
-			Index:          0,
-			OldMomentFnRef: fn1,
-			NewMomentFnRef: fn2,
-			Identity:       identity,
+			Index:           0,
+			OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
+			NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
+			Identity:        identity,
 		}).Error(), func() {
-			moment1.Validate(0, fn2, 2, identity)
+			moment1.Validate(0, moment.NewFn(fn2), 2, identity)
 		})
 	})
 }
@@ -69,18 +71,18 @@ func TestOutput(t *testing.T) {
 }
 
 func TestMomentFnChangeError(t *testing.T) {
-	fn1 := moment.NewFn(func(ctx context.Context, args int) (int, error) {
+	fn1 := func(ctx context.Context, args int) (int, error) {
 		return args, nil
-	})
-	fn2 := moment.NewFn(func(ctx context.Context, args int) (int, error) {
+	}
+	fn2 := func(ctx context.Context, args int) (int, error) {
 		return args, nil
-	})
+	}
 	identity := moment.NewIdentity(t.Context(), moment.Callpath{{File: "placeholder"}})
 	fnChangeErr := moment.MomentFnChangeError{
-		Index:          0,
-		OldMomentFnRef: fn1,
-		NewMomentFnRef: fn2,
-		Identity:       identity,
+		Index:           0,
+		OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
+		NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
+		Identity:        identity,
 	}
 	assert.ErrorIs(t, ftrerrors.InconsistentStateError(fnChangeErr), fnChangeErr)
 	assert.NotErrorIs(t, ftrerrors.InconsistentStateError(fnChangeErr), errors.New("some other error"))
