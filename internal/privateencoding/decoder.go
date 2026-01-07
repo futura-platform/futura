@@ -68,18 +68,9 @@ func (d *Decoder[T]) mustDecodeSimple(v any) error {
 var binaryUnmarshalerType = reflect.TypeOf((*encoding.BinaryUnmarshaler)(nil)).Elem()
 
 func implementsBinaryUnmarshaler(v reflect.Value) (func() encoding.BinaryUnmarshaler, bool) {
-	t := v.Type()
-	if t.Kind() == reflect.Interface && !v.IsNil() {
-		v = v.Elem()
-	}
-	if v.CanAddr() && v.Addr().Type().Implements(binaryUnmarshalerType) {
-		return func() encoding.BinaryUnmarshaler {
-			return v.Addr().Interface().(encoding.BinaryUnmarshaler)
-		}, true
-	}
 	return func() encoding.BinaryUnmarshaler {
-		return v.Interface().(encoding.BinaryUnmarshaler)
-	}, v.Type().Implements(binaryUnmarshalerType)
+		return v.Addr().Interface().(encoding.BinaryUnmarshaler)
+	}, v.CanAddr() && v.Addr().Type().Implements(binaryUnmarshalerType)
 }
 
 func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {

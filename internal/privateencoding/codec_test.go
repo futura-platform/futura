@@ -3,6 +3,7 @@ package privateencoding_test
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -251,6 +252,20 @@ func TestCodec(t *testing.T) {
 		a := any(1)
 		applyCodecThenCompare(t, a, nil)
 	})
+
+	// binary marshalable
+	t.Run("binary_marshalable_ptr_unmarshaller", func(t *testing.T) {
+		b := binaryMarshalablePtrUnmarshaller{}
+		applyCodecThenCompare(t, b, func(a, b binaryMarshalablePtrUnmarshaller) bool {
+			return b.didUnmarshal
+		})
+	})
+
+	t.Run("binary_marshalable_direct_unmarshaller", func(t *testing.T) {
+		b := binaryMarshalableDirectUnmarshaller{}
+		_, err := applyCodec(b)
+		assert.ErrorIs(t, err, errDirectUnmarshaller)
+	})
 }
 
 func codecTest[T any](value T) func(t *testing.T) {
@@ -267,6 +282,37 @@ func codecTest[T any](value T) func(t *testing.T) {
 			applyCodecThenCompare(t, MyType(value), nil)
 		})
 	}
+}
+
+type binaryMarshalablePtrUnmarshaller struct {
+	didUnmarshal bool
+}
+
+func (b binaryMarshalablePtrUnmarshaller) MarshalBinary() ([]byte, error) {
+	return []byte("marshalled"), nil
+}
+
+func (b *binaryMarshalablePtrUnmarshaller) UnmarshalBinary(data []byte) error {
+	if string(data) != "marshalled" {
+		return fmt.Errorf("invalid data")
+	}
+	b.didUnmarshal = true
+	return nil
+}
+
+type binaryMarshalableDirectUnmarshaller struct{}
+
+func (b binaryMarshalableDirectUnmarshaller) MarshalBinary() ([]byte, error) {
+	return []byte("marshalled"), nil
+}
+
+var errDirectUnmarshaller = fmt.Errorf("did call direct unmarshaller")
+
+func (b *binaryMarshalableDirectUnmarshaller) UnmarshalBinary(data []byte) error {
+	if string(data) != "marshalled" {
+		return fmt.Errorf("invalid data")
+	}
+	return errDirectUnmarshaller
 }
 
 func applyCodecThenCompare[T any](t *testing.T, value T, compareOverride func(T, T) bool) {
