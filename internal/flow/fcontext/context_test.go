@@ -15,18 +15,26 @@ import (
 )
 
 func TestWithFlow(t *testing.T) {
-	ctx := t.Context()
-	fOriginal := NewFlowExecution()
-	ctx = WithFlow(ctx, fOriginal)
-	f, ok := FromContext(ctx)
-	assert.True(t, ok)
-	assert.NotNil(t, f)
-	assert.Equal(t, fOriginal, f)
+	t.Run("normal case", func(t *testing.T) {
+		ctx := t.Context()
+		fOriginal := NewFlowExecution()
+		ctx = WithFlow(ctx, fOriginal)
+		f, ok := FromContext(ctx)
+		assert.True(t, ok)
+		assert.NotNil(t, f)
+		assert.Equal(t, fOriginal, f)
 
-	ctx2 := t.Context()
-	f2, ok := FromContext(ctx2)
-	assert.False(t, ok)
-	assert.Nil(t, f2)
+		ctx2 := t.Context()
+		f2, ok := FromContext(ctx2)
+		assert.False(t, ok)
+		assert.Nil(t, f2)
+	})
+	t.Run("nil flow execution case", func(t *testing.T) {
+		ctx := t.Context()
+		assert.Panics(t, func() {
+			WithFlow(ctx, nil)
+		})
+	})
 }
 
 func TestGetFlowContext_WrongGoroutine(t *testing.T) {
