@@ -38,13 +38,16 @@ func _newFlow[A, R any](
 	}
 }
 
+// SerializedFlow is a purely organizational type that allows code to explicitly say "these bytes represent a flow".
+type SerializedFlow []byte
+
 // NewFlow creates a new flow, and is intended to be the entry point for a flow.
 // It expects fn to be pure, except in child Step functions.
 func NewFlow[A, R any]() *Flow[A, R] {
 	return _newFlow[A, R](fcontext.NewFlowExecution())
 }
 
-func NewFlowFromSerialized[A, R any](serialized []byte) (*Flow[A, R], error) {
+func NewFlowFromSerialized[A, R any](serialized SerializedFlow) (*Flow[A, R], error) {
 	dec := privateencoding.NewDecoder[*fcontext.FlowExecution](bytes.NewReader(serialized))
 	exec, err := dec.Decode()
 	if err != nil {
@@ -95,7 +98,7 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 func init() {
 	gob.Register(fcontext.FlowExecution{})
 }
-func (f *Flow[A, R]) Serialize() ([]byte, error) {
+func (f *Flow[A, R]) Serialize() (SerializedFlow, error) {
 	sizeHeuristic := unsafe.Sizeof(*f.exec)
 	buf := bytes.NewBuffer(make([]byte, 0, sizeHeuristic))
 
