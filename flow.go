@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/futura-platform/futura/ftype"
@@ -19,11 +20,13 @@ type FlowFn[A, R any] func(b FlowBuilder, args A) (R, error)
 
 var (
 	ErrTopLevelFlowConflict = errors.New("do not call futura.Flow from within a flow")
+	ErrAlreadyRunning       = errors.New("flow is already running")
 	ErrFlowPanic            = errors.New("flow panicked")
 )
 
 type Flow[A, R any] struct {
-	exec *fcontext.FlowExecution
+	running atomic.Bool
+	exec    *fcontext.FlowExecution
 }
 
 // an internal helper to make sure later code doesn't forget to initialize new fields.
@@ -55,6 +58,11 @@ func NewFlowFromSerialized[A, R any](serialized []byte) (*Flow[A, R], error) {
 // It will continuously retry the flow until it is without error or the context is done.
 // Any panics within the flow will be caught and returned as an error.
 func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts ...ftype.FlowLoopOption) (result R, err error) {
+	if !f.running.CompareAndSwap(false, true) {
+		return *new(R), ErrAlreadyRunning
+	}
+	defer f.running.Store(false)
+
 	_, ok := fcontext.FromContext(ctx)
 	if ok {
 		return *new(R), ErrTopLevelFlowConflict

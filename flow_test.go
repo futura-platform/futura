@@ -28,6 +28,25 @@ func TestFlow(t *testing.T) {
 		}, nil)
 		assert.ErrorIs(t, err, futura.ErrTopLevelFlowConflict)
 	})
+	t.Run("do not execute a flow more than once concurrently", func(t *testing.T) {
+		fnEntered := make(chan struct{})
+		goroutine2Finished := make(chan struct{})
+		fn := func(b futura.FlowBuilder, _ *any) (string, error) {
+			close(fnEntered)
+			<-goroutine2Finished
+			return "result", nil
+		}
+		f := futura.NewFlow[*any, string]()
+		go func() {
+			<-fnEntered
+			defer close(goroutine2Finished)
+			_, err := f.Execute(t.Context(), fn, nil)
+			assert.ErrorIs(t, err, futura.ErrAlreadyRunning)
+		}()
+		r, err := f.Execute(t.Context(), fn, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, "result", r)
+	})
 	t.Run("Flow recovers from panics", func(t *testing.T) {
 		var expectedErr = errors.New("expected panic")
 		_, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
@@ -77,7 +96,7 @@ func TestFlow(t *testing.T) {
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
 		assert.ErrorIs(t, err, moment.MomentFnChangeError{
 			Index:           0,
-			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 69}}),
+			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 88}}),
 			OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
 			NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
 		})
