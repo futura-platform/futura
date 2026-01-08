@@ -38,7 +38,7 @@ func _newFlow[A, R any](
 	}
 }
 
-// SerializedFlow is a purely organizational type that allows code to explicitly say "these bytes represent a flow".
+// SerializedFlow is a semantic type alias that clarifies that these bytes represent a flow.
 type SerializedFlow []byte
 
 // NewFlow creates a new flow, and is intended to be the entry point for a flow.
