@@ -9,9 +9,10 @@ import (
 
 	"github.com/futura-platform/futura/flog"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
-	"github.com/futura-platform/futura/internal/flow/fcontext"
+	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 	"k8s.io/utils/diff"
 )
@@ -60,10 +61,10 @@ func evaluateWithCallstack[A comparable, R comparable](
 		replay.CallstackToCallpath(callstack),
 	)
 
-	f := fcontext.MustFromContext(ctx)
+	f := execution.MustFromContext(ctx)
 	l := flog.FromContext(ctx)
 
-	thisSequenceIndex := f.SequenceIndex()
+	thisSequenceIndex := sequence.GetIndex(ctx)
 	var cacheStatus string = "MISS"
 	defer func() {
 		r := recover()
@@ -82,7 +83,7 @@ func evaluateWithCallstack[A comparable, R comparable](
 
 	// first check if the expected callpath is the same as the current callpath,
 	// if nothing is expected (meaning if ok is false), we can continue
-	expectedIdentity, ok := f.ExpectedIdentity()
+	expectedIdentity, ok := f.ExpectedIdentity(ctx)
 	if ok && expectedIdentity.Callpath() != identity.Callpath() && f.ReplayFlags().PanicOnMomentOrderChange {
 		panic(ftrerrors.InconsistentStateError(fmt.Errorf(
 			"%w:\n%s",
@@ -104,12 +105,12 @@ func evaluateWithCallstack[A comparable, R comparable](
 	needsExecution := !ok || !currentMoment.Validate(thisSequenceIndex, fn, args, identity)
 	defer func() {
 		// handle the result of the step
-		f.RecordCurrentMoment(identity, currentMoment)
+		f.RecordCurrentMoment(ctx, identity, currentMoment)
 		if err != nil {
 			currentMoment.Invalidate()
 			return
 		}
-		f.Advance()
+		sequence.Advance(ctx)
 	}()
 	// validate it. If it no longer valid, re execute it and update the cache
 	if needsExecution {

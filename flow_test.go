@@ -10,14 +10,22 @@ import (
 
 	"github.com/futura-platform/futura"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
-	"github.com/futura-platform/futura/internal/flow/fcontext"
+	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestFlow(t *testing.T) {
+	t.Run("basic e2e test", func(t *testing.T) {
+		f := futura.NewFlow[*any, string]()
+		r, err := f.Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+			return "result", nil
+		}, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, "result", r)
+	})
 	t.Run("do not call Flow from within a flow", func(t *testing.T) {
-		ctx := fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
 		f1 := futura.NewFlow[*any, string]()
 		f2 := futura.NewFlow[*any, string]()
 		_, err := f1.Execute(ctx, func(b futura.FlowBuilder, _ *any) (string, error) {
@@ -96,7 +104,7 @@ func TestFlow(t *testing.T) {
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
 		assert.ErrorIs(t, err, moment.MomentFnChangeError{
 			Index:           0,
-			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 88}}),
+			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 96}}),
 			OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
 			NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
 		})

@@ -7,17 +7,16 @@ import (
 	"reflect"
 
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/flow/fcontext"
 	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/step"
 )
 
 func refWithInitialValue[T comparable](b FlowBuilder, initialValue T, options ...ftype.MomentFnOption) (ref *T) {
-	f := fcontext.MustFromContext(b)
 	options = append([]ftype.MomentFnOption{ftype.WithLabel(fmt.Sprintf(
 		"%T-ref[%d](%v)",
 		initialValue,
-		f.SequenceIndex(),
+		sequence.GetIndex(b),
 		initialValue,
 	))}, options...)
 	// use a step moment to create a pointer to the state,

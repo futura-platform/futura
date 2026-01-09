@@ -10,9 +10,10 @@ import (
 
 	"github.com/futura-platform/futura/ftype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
-	"github.com/futura-platform/futura/internal/flow/fcontext"
+	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -25,8 +26,8 @@ var mockStableCallstack = []runtime.Frame{{
 
 func TestStep(t *testing.T) {
 	t.Run("memoize result for identical inputs", func(t *testing.T) {
-		replay.Execute(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
-			f := fcontext.MustFromContext(ctx)
+		replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+			f := execution.MustFromContext(ctx)
 			ctx = f.StartNewReplay(ctx)
 
 			expectedResult := "expectedResult"
@@ -39,22 +40,22 @@ func TestStep(t *testing.T) {
 			result1, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, expectedResult, result1)
-			assert.Equal(t, 1, f.SequenceIndex())
+			assert.Equal(t, 1, sequence.GetIndex(ctx))
 			assert.Equal(t, 1, callCount)
 
-			f.Rewind()
+			ctx = sequence.With(ctx) // rewind
 			result2, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, result1, result2)
-			assert.Equal(t, 1, f.SequenceIndex())
+			assert.Equal(t, 1, sequence.GetIndex(ctx))
 			assert.Equal(t, 1, callCount)
 			return nil, nil
 		}, nil)
 	})
 
 	t.Run("does not memoize error", func(t *testing.T) {
-		replay.Execute(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
-			f := fcontext.MustFromContext(ctx)
+		replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+			f := execution.MustFromContext(ctx)
 			ctx = f.StartNewReplay(ctx)
 
 			expectedError := errors.New("expectedError")
@@ -67,22 +68,22 @@ func TestStep(t *testing.T) {
 			_, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.Error(t, err)
 			assert.ErrorIs(t, err, expectedError)
-			assert.Equal(t, 0, f.SequenceIndex())
+			assert.Equal(t, 0, sequence.GetIndex(ctx))
 			assert.Equal(t, 1, callCount)
 
-			f.Rewind()
+			ctx = sequence.With(ctx) // rewind
 			_, _, err = evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.Error(t, err)
 			assert.ErrorIs(t, err, expectedError)
-			assert.Equal(t, 0, f.SequenceIndex())
+			assert.Equal(t, 0, sequence.GetIndex(ctx))
 			assert.Equal(t, 2, callCount)
 			return nil, nil
 		}, nil)
 	})
 
 	t.Run("manual memo invalidation", func(t *testing.T) {
-		replay.Execute(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
-			f := fcontext.MustFromContext(ctx)
+		replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+			f := execution.MustFromContext(ctx)
 			ctx = f.StartNewReplay(ctx)
 
 			calls := 0
@@ -96,7 +97,7 @@ func TestStep(t *testing.T) {
 			assert.Equal(t, 1, result1)
 
 			invalidate()
-			f.Rewind()
+			ctx = sequence.With(ctx) // rewind
 			result2, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, 2, result2)
@@ -106,9 +107,9 @@ func TestStep(t *testing.T) {
 
 	t.Run("impure flow detection", func(t *testing.T) {
 		t.Run("panics if the moment fn changes when it not allowed to", func(t *testing.T) {
-			replay.Execute(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
-				f := fcontext.MustFromContext(ctx)
-				f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
+			replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+				f := execution.MustFromContext(ctx)
+				f.SetReplayFlags(func(flags *execution.ReplayFlags) {
 					flags.PanicOnMomentOrderChange = true
 				})
 				ctx = f.StartNewReplay(ctx)
@@ -125,7 +126,7 @@ func TestStep(t *testing.T) {
 				assert.NoError(t, err)
 
 				// restart and eval as if the code re-declared fn2 as this moment's fn
-				f.Rewind()
+				ctx = sequence.With(ctx) // rewind
 				expectedError := ftrerrors.InconsistentStateError(moment.MomentFnChangeError{
 					Index:           0,
 					Identity:        moment.NewIdentity(ctx, replay.CallstackToCallpath(mockStableCallstack)),
@@ -135,14 +136,14 @@ func TestStep(t *testing.T) {
 				assert.PanicsWithError(t, expectedError.Error(), func() {
 					evaluateWithCallstack(ctx, moment.NewFn(fn2), struct{}{}, mockStableCallstack)
 				})
-				assert.Equal(t, 0, f.SequenceIndex())
+				assert.Equal(t, 0, sequence.GetIndex(ctx))
 				return nil, nil
 			}, nil)
 		})
 		t.Run("panics if a new branch is taken when it not allowed to", func(t *testing.T) {
-			replay.Execute(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
-				f := fcontext.MustFromContext(ctx)
-				f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
+			replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+				f := execution.MustFromContext(ctx)
+				f.SetReplayFlags(func(flags *execution.ReplayFlags) {
 					flags.PanicOnMomentOrderChange = true
 				})
 				ctx = f.StartNewReplay(ctx)
@@ -161,11 +162,11 @@ func TestStep(t *testing.T) {
 				assert.NoError(t, err)
 
 				// restart and eval as if we took branch 2, which uses fn2
-				f.Rewind()
+				ctx = sequence.With(ctx) // rewind
 				testutil.PanicsWithErrorIs(t, ErrUnexpectedBranchTaken, func() {
 					evaluateWithCallstack(ctx, fn2, struct{}{}, branch2)
 				})
-				assert.Equal(t, 0, f.SequenceIndex())
+				assert.Equal(t, 0, sequence.GetIndex(ctx))
 				return nil, nil
 			}, nil)
 		})
@@ -174,8 +175,8 @@ func TestStep(t *testing.T) {
 	t.Run("wraps error with label", func(t *testing.T) {
 		label := "testLabel"
 		testErr := errors.New("expected error")
-		replay.Execute(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
-			f := fcontext.MustFromContext(ctx)
+		replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+			f := execution.MustFromContext(ctx)
 			ctx = f.StartNewReplay(ctx)
 			_, _, err := evaluateWithCallstack(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 				return nil, testErr
@@ -189,14 +190,14 @@ func TestStep(t *testing.T) {
 
 	t.Run("panics if evaluated outside of a flow function", func(t *testing.T) {
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrEvaledOutsideOfAFlowFunction).Error(), func() {
-			Evaluate(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()), moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+			Evaluate(execution.WithFlow(t.Context(), execution.NewFlowExecution()), moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 				return nil, nil
 			}), struct{}{})
 		})
 	})
 
 	t.Run("immediately returns without executing if the context is done", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()))
+		ctx, cancel := context.WithCancel(execution.WithFlow(t.Context(), execution.NewFlowExecution()))
 		cancel()
 		didExecute := false
 		replay.Execute(ctx, func(ctx context.Context, args any) (any, error) {
@@ -212,7 +213,7 @@ func TestStep(t *testing.T) {
 
 	t.Run("immedietly returns with the injected error if there is one", func(t *testing.T) {
 		expectedError := errors.New("expected error")
-		ctx := testutil.WithInjectedError(fcontext.WithFlow(t.Context(), fcontext.NewFlowExecution()), testutil.InjectedErrorLevelEvaluate, expectedError)
+		ctx := testutil.WithInjectedError(execution.WithFlow(t.Context(), execution.NewFlowExecution()), testutil.InjectedErrorLevelEvaluate, expectedError)
 		_, _, err := Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 			return nil, expectedError
 		}), struct{}{})

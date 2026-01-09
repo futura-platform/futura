@@ -6,7 +6,8 @@ import (
 	"reflect"
 
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/flow/fcontext"
+	"github.com/futura-platform/futura/internal/flow/execution"
+	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 )
 
 // this isn't exported so that StateContainer can be comparable
@@ -29,11 +30,11 @@ func (s stateContainerImplementation[T]) Set(value T) {
 }
 
 func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateContainer[T] {
-	f := fcontext.MustFromContext(b)
+	f := execution.MustFromContext(b)
 	stateRef := refWithInitialValue(b, initialValue, ftype.WithLabel(fmt.Sprintf(
 		"%T-state[%d](%v)",
 		initialValue,
-		f.SequenceIndex(),
+		sequence.GetIndex(b),
 		initialValue,
 	)))
 	return stateContainerImplementation[T]{
@@ -44,11 +45,10 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 			}
 			*stateRef = value
 			f.RestartCurrentReplay(b, errors.New("state updated by setState"))
-			f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
+			f.SetReplayFlags(func(flags *execution.ReplayFlags) {
 				// state changes might cause the flow to change, so we don't want to panic in that case.
 				flags.PanicOnMomentOrderChange = false
 			})
-			f.Rewind()
 			f.EvictUnseenCachedStates(b)
 		},
 	}

@@ -1,18 +1,20 @@
-package fcontext
+package execution
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/futura-platform/futura/flog"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/flow/replay/sequence"
+	"github.com/futura-platform/futura/internal/goroutinebind"
 	"github.com/futura-platform/futura/internal/utils"
-	"github.com/petermattis/goid"
 )
 
 type ctxKey string
@@ -22,9 +24,30 @@ const flowExecutionKey ctxKey = "futura_flow"
 type ReplayFlags struct {
 	PanicOnMomentOrderChange bool
 }
+
+// FlowExecution is a wrapper around the flow execution state.
+// It ensures that whenever the state is accessed/mutated, it is always canonical.
+// It allows complex atomic mutations of the state.
+// ALL methods for this MUST lock the mutex. It is more than just simply ensuring thread safety. It ensures that the state is always consistent.
 type FlowExecution struct {
-	replayFlags        ReplayFlags
-	creatorGoroutineID int64
+	mu sync.RWMutex
+	s  FlowExecutionState
+}
+
+// State returns the flow execution state.
+// Values returned by this method are gauranteed to be canonical.
+func (f *FlowExecution) State() FlowExecutionState {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	return f.s
+}
+
+// FlowExecutionState is the state of the flow execution.
+// All values here should be usable between program instances (i.e. no unsafe pointers, functions, goroutine ids, etc.).
+// This type is designed to be serialized and deserialized to facilitate distributed execution.
+type FlowExecutionState struct {
+	replayFlags ReplayFlags
 
 	// the current state of the flow.
 	stateCache map[moment.Identity]*moment.Moment
@@ -32,15 +55,20 @@ type FlowExecution struct {
 	unseenCachedCallpaths utils.SerializableSet[moment.Identity]
 
 	// given a certain state, this sequence should be deterministic.
-	callOrder     []moment.Identity
-	sequenceIndex int
+	callOrder []moment.Identity
 }
 
-// NewFlowExecution creates a new flow execution bound to the current goroutine.
 func NewFlowExecution() *FlowExecution {
 	return &FlowExecution{
-		creatorGoroutineID: goid.Get(),
-		stateCache:         make(map[moment.Identity]*moment.Moment),
+		s: FlowExecutionState{
+			stateCache: make(map[moment.Identity]*moment.Moment),
+		},
+	}
+}
+
+func NewFlowExecutionFromState(s FlowExecutionState) *FlowExecution {
+	return &FlowExecution{
+		s: s,
 	}
 }
 
@@ -48,21 +76,13 @@ func WithFlow(ctx context.Context, exec *FlowExecution) context.Context {
 	if exec == nil {
 		panic("flow execution cannot be nil")
 	}
-	return context.WithValue(ctx, flowExecutionKey, exec)
-}
-
-func (f *FlowExecution) Rewind() {
-	f.sequenceIndex = 0
-}
-
-func (f *FlowExecution) SequenceIndex() int {
-	return f.sequenceIndex
+	return context.WithValue(goroutinebind.BindGoroutine(ctx), flowExecutionKey, exec)
 }
 
 func (f *FlowExecution) EvictUnseenCachedStates(ctx context.Context) {
 	l := flog.FromContext(ctx)
-	for identity := range mapset.Elements(f.unseenCachedCallpaths) {
-		delete(f.stateCache, identity)
+	for identity := range mapset.Elements(f.s.unseenCachedCallpaths) {
+		delete(f.s.stateCache, identity)
 		l.LogAttrs(ctx, slog.LevelDebug, "evicted cached state",
 			slog.String("identity", identity.String()),
 		)
@@ -93,85 +113,102 @@ func (f *FlowExecution) RestartCurrentReplay(ctx context.Context, cause error) {
 }
 
 func (f *FlowExecution) StartNewReplay(ctx context.Context) context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	f.resetUnseenCachedCallpaths()
-	return replay.With(ctx)
+	return sequence.With(replay.With(ctx))
 }
 
 func (f *FlowExecution) resetUnseenCachedCallpaths() {
-	f.unseenCachedCallpaths = utils.NewSerializableSet(mapset.NewSetWithSize[moment.Identity](len(f.stateCache)))
-	for callpath := range f.stateCache {
-		f.unseenCachedCallpaths.Add(callpath)
+	f.s.unseenCachedCallpaths = utils.NewSerializableSet(mapset.NewSetWithSize[moment.Identity](len(f.s.stateCache)))
+	for callpath := range f.s.stateCache {
+		f.s.unseenCachedCallpaths.Add(callpath)
 	}
 }
 
 func (f *FlowExecution) ReplayFlags() ReplayFlags {
-	return f.replayFlags
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	return f.s.replayFlags
 }
 
 func (f *FlowExecution) SetReplayFlags(flags func(flags *ReplayFlags)) {
-	flags(&f.replayFlags)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	flags(&f.s.replayFlags)
 }
 
-func (f *FlowExecution) ExpectedIdentity() (moment.Identity, bool) {
-	if f.sequenceIndex > len(f.callOrder) {
+func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (moment.Identity, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	i := sequence.GetIndex(ctx)
+	if i > len(f.s.callOrder) {
 		panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
-			sequenceIndex:  f.sequenceIndex,
-			sequenceLength: len(f.callOrder),
+			sequenceIndex:  i,
+			sequenceLength: len(f.s.callOrder),
 		}))
-	} else if f.sequenceIndex == len(f.callOrder) {
+	} else if i == len(f.s.callOrder) {
 		return moment.Identity{}, false
 	}
 
-	identity := f.callOrder[f.sequenceIndex]
+	identity := f.s.callOrder[i]
 	return identity, true
 }
 
 func (f *FlowExecution) GetMoment(identity moment.Identity) (*moment.Moment, bool) {
-	moment, ok := f.stateCache[identity]
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	moment, ok := f.s.stateCache[identity]
 	return moment, ok
 }
 
 func (f *FlowExecution) InvalidateMoment(identity moment.Identity) {
-	delete(f.stateCache, identity)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	delete(f.s.stateCache, identity)
 }
 
 // RecordCurrentMoment stores the current identity+moment (growing the sequence slice if necessary)
 // it also marks the identity as seen.
-func (f *FlowExecution) RecordCurrentMoment(identity moment.Identity, currentMoment *moment.Moment) {
-	if f.sequenceIndex > len(f.callOrder) {
+func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment *moment.Moment) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	i := sequence.GetIndex(ctx)
+	if i > len(f.s.callOrder) {
 		panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
-			sequenceIndex:  f.sequenceIndex,
-			sequenceLength: len(f.callOrder),
+			sequenceIndex:  i,
+			sequenceLength: len(f.s.callOrder),
 		}))
-	} else if f.sequenceIndex == len(f.callOrder) {
-		_, ok := f.stateCache[identity]
+	} else if i == len(f.s.callOrder) {
+		_, ok := f.s.stateCache[identity]
 		if ok {
 			panic(ftrerrors.InconsistentStateError(UnexpectedCachedStateError{
 				identity: identity,
 			}))
 		}
-		f.callOrder = append(f.callOrder, identity)
+		f.s.callOrder = append(f.s.callOrder, identity)
 	} else {
-		f.callOrder[f.sequenceIndex] = identity
+		f.s.callOrder[i] = identity
 	}
-	f.unseenCachedCallpaths.Remove(identity)
-	f.stateCache[identity] = currentMoment
-}
-
-// Advance advances the sequence index by 1.
-func (f *FlowExecution) Advance() {
-	f.sequenceIndex++
+	f.s.unseenCachedCallpaths.Remove(identity)
+	f.s.stateCache[identity] = currentMoment
 }
 
 // FromContext retrieves the flow context from the context.
 // It will panic if this is being used in a goroutine other than the one that created the context.
 func FromContext(ctx context.Context) (*FlowExecution, bool) {
 	v, ok := ctx.Value(flowExecutionKey).(*FlowExecution)
-	if ok && v.creatorGoroutineID != goid.Get() {
-		panic(ftrerrors.InconsistentStateError(FlowContextUsedInWrongGoroutineError{
-			createdInGoroutineID: v.creatorGoroutineID,
-			usedInGoroutineID:    goid.Get(),
-		}))
+	if ok {
+		if err := goroutinebind.AssertBoundGoroutine(ctx); err != nil {
+			panic(ftrerrors.InconsistentStateError(err))
+		}
 	}
 	return v, ok
 }
@@ -203,6 +240,7 @@ func (e UnexpectedCachedStateError) Error() string {
 	return fmt.Sprintf("identity '%s' exists in the state cache, but was not expected to be present", e.identity.String())
 }
 
+// FlowContextUsedInWrongGoroutineError is an error used to enforce a flow executing all within the same goroutine.
 type FlowContextUsedInWrongGoroutineError struct {
 	createdInGoroutineID int64
 	usedInGoroutineID    int64

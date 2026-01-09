@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/flow/fcontext"
+	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
 )
 
@@ -16,30 +16,25 @@ type CallableFlow[A, T any] func(ctx context.Context, args A) (T, error)
 // - handling errors
 // - rewinding the sequence
 func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A, opts ...ftype.FlowLoopOption) (T, error) {
-	f := fcontext.MustFromContext(ctx)
+	f := execution.MustFromContext(ctx)
 	for _, opt := range opts {
 		ctx = opt(ctx)
 	}
 
-	// ALWAYS rewind the flow at the end of the loop, so that the execution state is context switch safe once this function returns.
-	defer f.Rewind()
-
 	for ; ; func() {
-		f.SetReplayFlags(func(flags *fcontext.ReplayFlags) {
+		f.SetReplayFlags(func(flags *execution.ReplayFlags) {
 			flags.PanicOnMomentOrderChange = true
 		})
-		f.Rewind()
 		f.EvictUnseenCachedStates(ctx)
 	}() {
 	restartReplay:
 		replayCtx := f.StartNewReplay(ctx)
 		result, err := replay.Execute(replayCtx, callableFlow, args)
 		replay.Cancel(replayCtx, nil)
-
 		if ctx.Err() != nil {
 			// if the context is done, comply by returning immediately
 			return result, ctx.Err()
-		} else if errors.Is(context.Cause(replayCtx), fcontext.ErrRestartReplay) {
+		} else if errors.Is(context.Cause(replayCtx), execution.ErrRestartReplay) {
 			// special case to restart the replay without performing the default end of replay behavior.
 			goto restartReplay
 		} else if err == nil {
