@@ -10,6 +10,7 @@ import (
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/step"
 	"github.com/stretchr/testify/assert"
@@ -102,11 +103,13 @@ func TestLoopFlow(t *testing.T) {
 		}, ftype.WithLabel("fn2"))
 
 		f := execution.MustFromContext(ctx)
+		flagsSetter := func(flags *replay.Flags) {
+			flags.PanicOnMomentOrderChange = false
+		}
+		f.SetNextFlags(flagsSetter)
+
 		r, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ struct{}) (r string, err error) {
-			f.SetReplayFlags(func(flags *execution.ReplayFlags) {
-				// allow the moment order to change, since we're testing that the moment is evicted.
-				flags.PanicOnMomentOrderChange = false
-			})
+			f.SetNextFlags(flagsSetter)
 			replays++
 			r1 := "didnteval"
 			if replays != 2 {

@@ -7,31 +7,26 @@ import (
 	"log/slog"
 	"sync"
 
-	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/futura-platform/futura/flog"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/goroutinebind"
-	"github.com/futura-platform/futura/internal/utils"
 )
 
 type ctxKey string
 
 const flowExecutionKey ctxKey = "futura_flow"
 
-type ReplayFlags struct {
-	PanicOnMomentOrderChange bool
-}
-
 // FlowExecution is a wrapper around the flow execution state.
 // It ensures that whenever the state is accessed/mutated, it is always canonical.
 // It allows complex atomic mutations of the state.
 // ALL methods for this MUST lock the mutex. It is more than just simply ensuring thread safety. It ensures that the state is always consistent.
 type FlowExecution struct {
-	mu sync.RWMutex
-	s  FlowExecutionState
+	mu        sync.RWMutex
+	nextFlags replay.Flags
+	s         FlowExecutionState
 }
 
 // State returns the flow execution state.
@@ -47,12 +42,8 @@ func (f *FlowExecution) State() FlowExecutionState {
 // All values here should be usable between program instances (i.e. no unsafe pointers, functions, goroutine ids, etc.).
 // This type is designed to be serialized and deserialized to facilitate distributed execution.
 type FlowExecutionState struct {
-	replayFlags ReplayFlags
-
-	// the current state of the flow.
+	// a map of the step moment identifiers to their memoized moment.
 	stateCache map[moment.Identity]*moment.Moment
-	// this includes the callpaths that have not been seen yet in the current replay.
-	unseenCachedCallpaths utils.SerializableSet[moment.Identity]
 
 	// given a certain state, this sequence should be deterministic.
 	callOrder []moment.Identity
@@ -63,12 +54,14 @@ func NewFlowExecution() *FlowExecution {
 		s: FlowExecutionState{
 			stateCache: make(map[moment.Identity]*moment.Moment),
 		},
+		nextFlags: DefaultReplayFlags,
 	}
 }
 
 func NewFlowExecutionFromState(s FlowExecutionState) *FlowExecution {
 	return &FlowExecution{
-		s: s,
+		s:         s,
+		nextFlags: DefaultReplayFlags,
 	}
 }
 
@@ -79,11 +72,14 @@ func WithFlow(ctx context.Context, exec *FlowExecution) context.Context {
 	return context.WithValue(goroutinebind.BindGoroutine(ctx), flowExecutionKey, exec)
 }
 
-func (f *FlowExecution) EvictUnseenCachedStates(ctx context.Context) {
-	l := flog.FromContext(ctx)
-	for identity := range mapset.Elements(f.s.unseenCachedCallpaths) {
+func (f *FlowExecution) EvictUnseenCachedStates(replayCtx context.Context) {
+	l := flog.FromContext(replayCtx)
+	for identity := range f.s.stateCache {
+		if sequence.IsSeen(replayCtx, identity) {
+			continue
+		}
 		delete(f.s.stateCache, identity)
-		l.LogAttrs(ctx, slog.LevelDebug, "evicted cached state",
+		l.LogAttrs(replayCtx, slog.LevelDebug, "evicted cached state",
 			slog.String("identity", identity.String()),
 		)
 	}
@@ -112,33 +108,26 @@ func (f *FlowExecution) RestartCurrentReplay(ctx context.Context, cause error) {
 	replay.Cancel(ctx, fmt.Errorf("%w: %w", ErrRestartReplay, cause))
 }
 
+var DefaultReplayFlags = replay.Flags{
+	PanicOnMomentOrderChange: true,
+}
+
 func (f *FlowExecution) StartNewReplay(ctx context.Context) context.Context {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.resetUnseenCachedCallpaths()
-	return sequence.With(replay.With(ctx))
+	defer func() {
+		// reset to default flags
+		f.nextFlags = DefaultReplayFlags
+	}()
+	return sequence.With(replay.With(ctx), f.nextFlags)
 }
 
-func (f *FlowExecution) resetUnseenCachedCallpaths() {
-	f.s.unseenCachedCallpaths = utils.NewSerializableSet(mapset.NewSetWithSize[moment.Identity](len(f.s.stateCache)))
-	for callpath := range f.s.stateCache {
-		f.s.unseenCachedCallpaths.Add(callpath)
-	}
-}
-
-func (f *FlowExecution) ReplayFlags() ReplayFlags {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	return f.s.replayFlags
-}
-
-func (f *FlowExecution) SetReplayFlags(flags func(flags *ReplayFlags)) {
+func (f *FlowExecution) SetNextFlags(fn func(flags *replay.Flags)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	flags(&f.s.replayFlags)
+	fn(&f.nextFlags)
 }
 
 func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (moment.Identity, bool) {
@@ -197,7 +186,7 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 	} else {
 		f.s.callOrder[i] = identity
 	}
-	f.s.unseenCachedCallpaths.Remove(identity)
+	sequence.MarkSeen(ctx, identity)
 	f.s.stateCache[identity] = currentMoment
 }
 

@@ -84,7 +84,7 @@ func evaluateWithCallstack[A comparable, R comparable](
 	// first check if the expected callpath is the same as the current callpath,
 	// if nothing is expected (meaning if ok is false), we can continue
 	expectedIdentity, ok := f.ExpectedIdentity(ctx)
-	if ok && expectedIdentity.Callpath() != identity.Callpath() && f.ReplayFlags().PanicOnMomentOrderChange {
+	if ok && expectedIdentity.Callpath() != identity.Callpath() && sequence.GetFlags(ctx).PanicOnMomentOrderChange {
 		panic(ftrerrors.InconsistentStateError(fmt.Errorf(
 			"%w:\n%s",
 			ErrUnexpectedBranchTaken,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/internal/flow/execution"
+	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 )
 
@@ -45,7 +46,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 			}
 			*stateRef = value
 			f.RestartCurrentReplay(b, errors.New("state updated by setState"))
-			f.SetReplayFlags(func(flags *execution.ReplayFlags) {
+			f.SetNextFlags(func(flags *replay.Flags) {
 				// state changes might cause the flow to change, so we don't want to panic in that case.
 				flags.PanicOnMomentOrderChange = false
 			})

@@ -43,7 +43,7 @@ func TestStep(t *testing.T) {
 			assert.Equal(t, 1, sequence.GetIndex(ctx))
 			assert.Equal(t, 1, callCount)
 
-			ctx = sequence.With(ctx) // rewind
+			ctx = sequence.With(ctx, replay.Flags{}) // rewind
 			result2, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, result1, result2)
@@ -71,7 +71,7 @@ func TestStep(t *testing.T) {
 			assert.Equal(t, 0, sequence.GetIndex(ctx))
 			assert.Equal(t, 1, callCount)
 
-			ctx = sequence.With(ctx) // rewind
+			ctx = sequence.With(ctx, execution.DefaultReplayFlags) // rewind
 			_, _, err = evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.Error(t, err)
 			assert.ErrorIs(t, err, expectedError)
@@ -97,7 +97,7 @@ func TestStep(t *testing.T) {
 			assert.Equal(t, 1, result1)
 
 			invalidate()
-			ctx = sequence.With(ctx) // rewind
+			ctx = sequence.With(ctx, execution.DefaultReplayFlags) // rewind
 			result2, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)
 			assert.Equal(t, 2, result2)
@@ -109,7 +109,7 @@ func TestStep(t *testing.T) {
 		t.Run("panics if the moment fn changes when it not allowed to", func(t *testing.T) {
 			replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
 				f := execution.MustFromContext(ctx)
-				f.SetReplayFlags(func(flags *execution.ReplayFlags) {
+				f.SetNextFlags(func(flags *replay.Flags) {
 					flags.PanicOnMomentOrderChange = true
 				})
 				ctx = f.StartNewReplay(ctx)
@@ -126,7 +126,7 @@ func TestStep(t *testing.T) {
 				assert.NoError(t, err)
 
 				// restart and eval as if the code re-declared fn2 as this moment's fn
-				ctx = sequence.With(ctx) // rewind
+				ctx = sequence.With(ctx, execution.DefaultReplayFlags) // rewind
 				expectedError := ftrerrors.InconsistentStateError(moment.MomentFnChangeError{
 					Index:           0,
 					Identity:        moment.NewIdentity(ctx, replay.CallstackToCallpath(mockStableCallstack)),
@@ -143,7 +143,7 @@ func TestStep(t *testing.T) {
 		t.Run("panics if a new branch is taken when it not allowed to", func(t *testing.T) {
 			replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
 				f := execution.MustFromContext(ctx)
-				f.SetReplayFlags(func(flags *execution.ReplayFlags) {
+				f.SetNextFlags(func(flags *replay.Flags) {
 					flags.PanicOnMomentOrderChange = true
 				})
 				ctx = f.StartNewReplay(ctx)
@@ -162,7 +162,7 @@ func TestStep(t *testing.T) {
 				assert.NoError(t, err)
 
 				// restart and eval as if we took branch 2, which uses fn2
-				ctx = sequence.With(ctx) // rewind
+				ctx = sequence.With(ctx, execution.DefaultReplayFlags) // rewind
 				testutil.PanicsWithErrorIs(t, ErrUnexpectedBranchTaken, func() {
 					evaluateWithCallstack(ctx, fn2, struct{}{}, branch2)
 				})

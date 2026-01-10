@@ -21,16 +21,12 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		ctx = opt(ctx)
 	}
 
-	for ; ; func() {
-		f.SetReplayFlags(func(flags *execution.ReplayFlags) {
-			flags.PanicOnMomentOrderChange = true
-		})
-		f.EvictUnseenCachedStates(ctx)
-	}() {
+	for {
 	restartReplay:
 		replayCtx := f.StartNewReplay(ctx)
 		result, err := replay.Execute(replayCtx, callableFlow, args)
 		replay.Cancel(replayCtx, nil)
+		f.EvictUnseenCachedStates(replayCtx)
 		if ctx.Err() != nil {
 			// if the context is done, comply by returning immediately
 			return result, ctx.Err()

@@ -1,29 +1,58 @@
 package sequence
 
-import "context"
+import (
+	"context"
+
+	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/internal/flow/replay"
+)
 
 type contextKey string
 
 const ctxKey contextKey = "sequence_index_context"
 
-// With wraps the context with a new sequence index.
-func With(ctx context.Context) context.Context {
-	return context.WithValue(ctx, ctxKey, new(int))
+type state struct {
+	flags         replay.Flags
+	index         int
+	seenCallpaths mapset.Set[moment.Identity]
 }
 
-func getIndexPtr(ctx context.Context) *int {
-	index, ok := ctx.Value(ctxKey).(*int)
+// With wraps the context with a new sequence index.
+func With(ctx context.Context, flags replay.Flags) context.Context {
+	return context.WithValue(ctx, ctxKey, &state{
+		flags:         flags,
+		seenCallpaths: mapset.NewSet[moment.Identity](),
+	})
+}
+
+func getSequenceState(ctx context.Context) *state {
+	state, ok := ctx.Value(ctxKey).(*state)
 	if !ok {
-		panic("sequence index not found")
+		panic("sequence state not found")
 	}
-	return index
+	return state
 }
 
 func GetIndex(ctx context.Context) int {
-	return *getIndexPtr(ctx)
+	return getSequenceState(ctx).index
 }
 
 func Advance(ctx context.Context) {
-	i := getIndexPtr(ctx)
-	*i++
+	s := getSequenceState(ctx)
+	s.index++
+}
+
+func MarkSeen(ctx context.Context, identity moment.Identity) {
+	s := getSequenceState(ctx)
+	s.seenCallpaths.Add(identity)
+}
+
+func IsSeen(ctx context.Context, identity moment.Identity) bool {
+	s := getSequenceState(ctx)
+	return s.seenCallpaths.Contains(identity)
+}
+
+func GetFlags(ctx context.Context) replay.Flags {
+	return getSequenceState(ctx).flags
 }

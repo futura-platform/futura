@@ -4,13 +4,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSequenceContext(t *testing.T) {
 	t.Run("basic", func(t *testing.T) {
-		ctx := sequence.With(t.Context())
+		ctx := sequence.With(t.Context(), replay.Flags{})
 		assert.Equal(t, 0, sequence.GetIndex(ctx))
 		for i := range 10 {
 			sequence.Advance(ctx)
@@ -20,5 +21,11 @@ func TestSequenceContext(t *testing.T) {
 	t.Run("panic on undefined key", func(t *testing.T) {
 		ctx := context.Background()
 		assert.Panics(t, func() { sequence.GetIndex(ctx) })
+	})
+	t.Run("flags", func(t *testing.T) {
+		ctx := sequence.With(t.Context(), replay.Flags{
+			PanicOnMomentOrderChange: true,
+		})
+		assert.True(t, sequence.GetFlags(ctx).PanicOnMomentOrderChange)
 	})
 }
