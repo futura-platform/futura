@@ -7,9 +7,9 @@ import (
 	"reflect"
 
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/step"
+	"github.com/futura-platform/futura/moment"
 )
 
 func refWithInitialValue[T comparable](b FlowBuilder, initialValue T, options ...ftype.MomentFnOption) (ref *T) {

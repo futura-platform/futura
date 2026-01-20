@@ -9,12 +9,11 @@ import (
 	"math"
 	"reflect"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/vmihailenco/msgpack/v5"
 
-	privateencodinginternal "github.com/futura-platform/futura/internal/privateencoding/internal"
+	privateencodinginternal "github.com/futura-platform/futura/privateencoding/internal"
 )
 
 // Encoder is used to serialize values of type T to a binary format,
@@ -40,7 +39,10 @@ func NewEncoder[T any](w io.Writer) *Encoder[T] {
 func (e *Encoder[T]) Encode(data T) error {
 	// Always go through encodeValue so that the same fast and slow
 	// paths are used consistently at all depths.
-	return e.encodeValue(reflect.ValueOf(&data).Elem(), "root")
+	return e.encodeValue(
+		reflect.ValueOf(&data).Elem(),
+		"root",
+	)
 }
 
 type Kind byte
@@ -98,20 +100,14 @@ func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 		return nil
 	}
 	if uv.Kind() == reflect.Interface {
-		// register types for gob jit at runtime
-
-		if !uv.IsNil() && ((uv.Type() == anyType) ||
-			(uv.Type().PkgPath() == "github.com/futura-platform/futura/ftype/seal" &&
-				strings.HasPrefix(uv.Type().Name(), "Sealed["))) {
-			jitGobRegister(uv.Elem())
-		}
-
 		// let gob handle interface serialization
 		return encodePathError(path, e.interfaceEncoder.EncodeValue(uv))
 	}
 
 	// first try to encode through the fast binary encoder
-	err, isSimple := e.encodeSimple(uv.Interface())
+	err, isSimple := e.encodeSimple(
+		uv.Interface(),
+	)
 	if err != nil {
 		return encodePathError(path, err)
 	} else if isSimple {

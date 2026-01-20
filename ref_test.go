@@ -45,7 +45,7 @@ func TestRef(t *testing.T) {
 			state := futura.Ref[int](b)
 			assert.Equal(t, actualState, *state)
 			actualState++
-			(*state)++
+			*state++
 
 			_, err := futura.Step(b, failsTwice, &struct{}{})
 			if err != nil {

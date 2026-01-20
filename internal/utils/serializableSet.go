@@ -5,7 +5,7 @@ import (
 	"encoding"
 
 	mapset "github.com/deckarep/golang-set/v2"
-	"github.com/futura-platform/futura/internal/privateencoding"
+	"github.com/futura-platform/futura/privateencoding"
 )
 
 type SerializableSet[T comparable] struct {

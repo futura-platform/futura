@@ -7,8 +7,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/utils/testutil"
+	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
 

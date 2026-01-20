@@ -16,7 +16,7 @@ var (
 )
 
 func defaultLogger() *slog.Logger {
-	if testing.Testing() && testing.Verbose() {
+	if testing.Testing() /*&& testing.Verbose()*/ {
 		return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		}))

@@ -12,8 +12,9 @@ import (
 	"time"
 
 	"github.com/futura-platform/futura/ftype/seal"
-	"github.com/futura-platform/futura/internal/privateencoding"
-	"github.com/futura-platform/futura/internal/privateencoding/internal/otherpackage"
+	"github.com/futura-platform/futura/moment"
+	"github.com/futura-platform/futura/privateencoding"
+	"github.com/futura-platform/futura/privateencoding/internal/otherpackage"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/utils/diff"
 )
@@ -232,8 +233,8 @@ func TestCodec(t *testing.T) {
 		})
 	})
 
-	// jit register sealed types
-	t.Run("jit_register_sealed_types", func(t *testing.T) {
+	// sealed types
+	t.Run("sealed_types", func(t *testing.T) {
 		a := seal.Seal(1)
 		applyCodecThenCompare(t, a, nil)
 
@@ -265,6 +266,11 @@ func TestCodec(t *testing.T) {
 		b := binaryMarshalableDirectUnmarshaller{}
 		_, err := applyCodec(b)
 		assert.ErrorIs(t, err, errDirectUnmarshaller)
+	})
+
+	t.Run("moment_identity", func(t *testing.T) {
+		id := moment.NewIdentity(t.Context(), moment.Callpath{{File: "test.go", Line: 1}})
+		applyCodecThenCompare(t, id, nil)
 	})
 }
 

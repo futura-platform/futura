@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/step"
+	"github.com/futura-platform/futura/moment"
 )
 
 // ComparableMomentFn is a function that is has comparable inputs and returns a comparable type.

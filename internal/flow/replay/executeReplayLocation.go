@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/moment"
 )
 
 const (

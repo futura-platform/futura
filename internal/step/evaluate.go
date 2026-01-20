@@ -10,10 +10,10 @@ import (
 	"github.com/futura-platform/futura/flog"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/utils/testutil"
+	"github.com/futura-platform/futura/moment"
 	"k8s.io/utils/diff"
 )
 
@@ -26,7 +26,7 @@ func Evaluate[A comparable, R comparable](
 	ctx context.Context,
 	fn moment.Fn[A, R],
 	args A,
-) (output R, invalidate func(), err error) {
+) (output R, invalidate func(ctx context.Context), err error) {
 	if err = testutil.InjectedError(ctx, testutil.InjectedErrorLevelEvaluate); err != nil {
 		return
 	}
@@ -51,7 +51,7 @@ func evaluateWithCallstack[A comparable, R comparable](
 	fn moment.Fn[A, R],
 	args A,
 	callstack []runtime.Frame,
-) (output R, invalidate func(), err error) {
+) (output R, invalidate func(ctx context.Context), err error) {
 	if ctx.Err() != nil {
 		err = ctx.Err()
 		return
@@ -96,7 +96,8 @@ func evaluateWithCallstack[A comparable, R comparable](
 	}
 
 	// then get the moment from the cache
-	currentMoment, ok := f.GetMoment(identity)
+	currentMomentValue, ok := f.GetMoment(ctx, identity)
+	currentMoment := &currentMomentValue
 	if !ok {
 		currentMoment = moment.NewMoment(fn, args)
 	}
@@ -104,10 +105,12 @@ func evaluateWithCallstack[A comparable, R comparable](
 	// validate BEFORE deferring the output handler, so that in the event of a panic, nothing is recorded.
 	needsExecution := !ok || !currentMoment.Validate(thisSequenceIndex, fn, args, identity)
 	defer func() {
-		// handle the result of the step
-		f.RecordCurrentMoment(ctx, identity, currentMoment)
 		if err != nil {
 			currentMoment.Invalidate()
+		}
+		// handle the result of the step, if it was successful
+		f.RecordCurrentMoment(ctx, identity, *currentMoment)
+		if err != nil {
 			return
 		}
 		sequence.Advance(ctx)
@@ -124,7 +127,7 @@ func evaluateWithCallstack[A comparable, R comparable](
 	}
 
 	// setup invalidation function
-	invalidate = func() { f.InvalidateMoment(identity) }
+	invalidate = func(ctx context.Context) { f.InvalidateMoment(ctx, identity) }
 
 	// return the memoized result
 	anyOutput := currentMoment.Output()

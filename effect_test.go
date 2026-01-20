@@ -9,8 +9,8 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/step"
+	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
 

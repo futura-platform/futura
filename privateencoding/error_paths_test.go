@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/futura-platform/futura/internal/privateencoding"
+	"github.com/futura-platform/futura/privateencoding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

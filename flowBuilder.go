@@ -3,7 +3,7 @@ package futura
 import (
 	"context"
 
-	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/moment"
 )
 
 // FlowBuilder is a builder for a flow. It is used as a helper for more readable flow definitions.

@@ -26,7 +26,7 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		replayCtx := f.StartNewReplay(ctx)
 		result, err := replay.Execute(replayCtx, callableFlow, args)
 		replay.Cancel(replayCtx, nil)
-		f.EvictUnseenCachedStates(replayCtx)
+
 		if ctx.Err() != nil {
 			// if the context is done, comply by returning immediately
 			return result, ctx.Err()
@@ -39,5 +39,8 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 			// special case to immedieately return the error from the loop.
 			return result, err
 		}
+
+		// perform eviction here, after potential replays are completed
+		f.EvictUnseenCachedStates(replayCtx)
 	}
 }

@@ -1,18 +1,16 @@
 package futura
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/privateencoding"
 )
 
 type FlowFn[A, R any] func(b FlowBuilder, args A) (R, error)
@@ -46,14 +44,8 @@ func NewFlow[A, R any]() *Flow[A, R] {
 	return _newFlow[A, R](execution.NewFlowExecution())
 }
 
-func NewFlowFromSerialized[A, R any](serialized SerializedFlow) (*Flow[A, R], error) {
-	dec := privateencoding.NewDecoder[execution.FlowExecutionState](bytes.NewReader(serialized))
-	state, err := dec.Decode()
-	if err != nil {
-		return nil, err
-	}
-
-	return _newFlow[A, R](execution.NewFlowExecutionFromState(state)), nil
+func NewFlowFromContainer[A, R any](c executiontype.TransactionalContainer) *Flow[A, R] {
+	return _newFlow[A, R](execution.NewFlowExecutionWithContainer(c))
 }
 
 // Execute runs the flow execution loop, and is intended to be the entry point for a flow.
@@ -92,18 +84,4 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 	)
 
 	return result, err
-}
-
-func (f *Flow[A, R]) Serialize() (SerializedFlow, error) {
-	state := f.exec.State()
-
-	sizeHeuristic := unsafe.Sizeof(state)
-	buf := bytes.NewBuffer(make([]byte, 0, sizeHeuristic))
-
-	enc := privateencoding.NewEncoder[execution.FlowExecutionState](buf)
-	if err := enc.Encode(state); err != nil {
-		panic(err)
-	}
-
-	return buf.Bytes(), nil
 }

@@ -3,7 +3,7 @@ package replay
 import (
 	"runtime"
 
-	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/moment"
 )
 
 func CallstackToCallpath(callstack []runtime.Frame) moment.Callpath {

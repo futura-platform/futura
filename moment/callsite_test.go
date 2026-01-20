@@ -3,7 +3,7 @@ package moment_test
 import (
 	"testing"
 
-	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/moment"
 )
 
 // this just exists to cover the code with tests, and to ensure the String method exists.

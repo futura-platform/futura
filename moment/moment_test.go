@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
-	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
 

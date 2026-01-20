@@ -9,10 +9,10 @@ import (
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/step"
+	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,10 +34,17 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("Flow cancellation", func(t *testing.T) {
 		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
-		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
-			return "", ftype.ErrCancelFlow
+		r, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			_, _, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				return "", ftype.ErrCancelFlow
+			}), struct{}{})
+			if err != nil {
+				return "expected", err
+			}
+			return "unexpected", ftype.ErrCancelFlow
 		}, &struct{}{})
 		assert.ErrorIs(t, err, ftype.ErrCancelFlow)
+		assert.Equal(t, "expected", r)
 	})
 
 	t.Run("Regular error handling", func(t *testing.T) {

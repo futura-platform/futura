@@ -11,10 +11,10 @@ import (
 	"github.com/futura-platform/futura/ftype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/utils/testutil"
+	"github.com/futura-platform/futura/moment"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -96,7 +96,7 @@ func TestStep(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, 1, result1)
 
-			invalidate()
+			invalidate(ctx)
 			ctx = sequence.With(ctx, execution.DefaultReplayFlags) // rewind
 			result2, _, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
 			assert.NoError(t, err)

@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/futura-platform/futura/internal/privateencoding"
+	"github.com/futura-platform/futura/privateencoding"
 )
 
 func benchmarkEncodeDecode[T any](b *testing.B, value T) {

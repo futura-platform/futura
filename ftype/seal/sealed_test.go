@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/futura-platform/futura/internal/privateencoding"
+	"github.com/futura-platform/futura/privateencoding"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,12 +28,12 @@ func TestSealInvalidValues(t *testing.T) {
 	assert.Panics(t, func() { Seal(make(chan int)) })
 }
 func TestUnsealInvalidValue(t *testing.T) {
-	invalidSealedInt := sealedWithString[int]{
+	invalidSealedInt := Sealed[int]{
 		comparableSerialized: "some too long value for an int",
 	}
 	assert.Panics(t, func() { invalidSealedInt.V() })
 
-	invalidSealedString := sealedWithString[string]{
+	invalidSealedString := Sealed[string]{
 		comparableSerialized: "some invalid serialized string",
 	}
 	assert.Panics(t, func() { invalidSealedString.V() })

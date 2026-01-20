@@ -2,44 +2,17 @@ package seal
 
 import (
 	"bytes"
-	"encoding/gob"
 	"fmt"
 	"strings"
 	"unsafe"
 
-	"github.com/futura-platform/futura/internal/privateencoding"
+	"github.com/futura-platform/futura/privateencoding"
 )
 
-type Sealed[T any] interface {
-	V() T
-}
-
-type sealedWithString[T any] struct {
+type Sealed[T any] struct {
 	// The serialized value of the input value.
 	// It is a string so that it is comparable.
 	comparableSerialized string
-}
-
-// var _ encoding.BinaryMarshaler = sealedWithString[any]{}
-// var _ encoding.BinaryUnmarshaler = (*sealedWithString[any])(nil)
-
-// func (s sealedWithString[T]) MarshalBinary() ([]byte, error) {
-// 	return []byte(s.comparableSerialized), nil
-// }
-// func (s *sealedWithString[T]) UnmarshalBinary(data []byte) error {
-// 	s.comparableSerialized = string(data)
-// 	return nil
-// }
-
-var _ gob.GobEncoder = sealedWithString[any]{}
-var _ gob.GobDecoder = &sealedWithString[any]{}
-
-func (s sealedWithString[T]) GobEncode() ([]byte, error) {
-	return []byte(s.comparableSerialized), nil
-}
-func (s *sealedWithString[T]) GobDecode(data []byte) error {
-	s.comparableSerialized = string(data)
-	return nil
 }
 
 // Seal creates a read only, "sealed" value for any input value.
@@ -54,7 +27,7 @@ func Seal[T any](value T) Sealed[T] {
 		panic(err)
 	}
 
-	return sealedWithString[T]{
+	return Sealed[T]{
 		comparableSerialized: buf.String(),
 	}
 }
@@ -62,7 +35,7 @@ func Seal[T any](value T) Sealed[T] {
 // V returns the underlying value of the sealed value.
 // The return value is guaranteed to have the same shape
 // as the input value, but it is not guaranteed to have the same pointers.
-func (s sealedWithString[T]) V() T {
+func (s Sealed[T]) V() T {
 	reader := strings.NewReader(s.comparableSerialized)
 	dec := privateencoding.NewDecoder[T](reader)
 	value, err := dec.Decode()

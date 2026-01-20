@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	privateencodinginternal "github.com/futura-platform/futura/internal/privateencoding/internal"
-	"github.com/futura-platform/futura/internal/privateencoding/internal/otherpackage"
+	privateencodinginternal "github.com/futura-platform/futura/privateencoding/internal"
+	"github.com/futura-platform/futura/privateencoding/internal/otherpackage"
 	"github.com/stretchr/testify/assert"
 )
 

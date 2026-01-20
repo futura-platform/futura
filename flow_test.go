@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -104,7 +105,7 @@ func TestFlow(t *testing.T) {
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
 		assert.ErrorIs(t, err, moment.MomentFnChangeError{
 			Index:           0,
-			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 96}}),
+			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 97}}),
 			OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
 			NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
 		})
@@ -137,7 +138,7 @@ func TestFlow(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, expectedExecCount, execCount)
 	})
-	t.Run("Flow can be serialized and deserialized, so that the execution state resumes from where it left off", func(t *testing.T) {
+	t.Run("Flow can be persisted in an execution container, so that the execution state resumes from where it left off", func(t *testing.T) {
 		step1Called := make(chan struct{})
 		defer close(step1Called)
 
@@ -167,8 +168,10 @@ func TestFlow(t *testing.T) {
 			return r1 + r2, nil
 		}
 
+		container := executiontype.NewInMemoryContainer()
+
 		// perform the first execution
-		f1 := futura.NewFlow[*any, string]()
+		f1 := futura.NewFlowFromContainer[*any, string](container)
 
 		firstExecutionContext, cancelFirstExecution := context.WithCancel(t.Context())
 		defer cancelFirstExecution()
@@ -184,11 +187,7 @@ func TestFlow(t *testing.T) {
 		assert.Equal(t, 0, step2Calls)
 
 		// simulate a context switch
-		serializedFlow, err := f1.Serialize()
-		assert.NoError(t, err)
-		f2, err := futura.NewFlowFromSerialized[*any, string](serializedFlow)
-		assert.NoError(t, err)
-
+		f2 := futura.NewFlowFromContainer[*any, string](container)
 		assert.Equal(t, f1, f2)
 
 		// resume the execution

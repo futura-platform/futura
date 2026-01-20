@@ -5,11 +5,12 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/goroutinebind"
+	"github.com/futura-platform/futura/moment"
 	"github.com/petermattis/goid"
 	"github.com/stretchr/testify/assert"
 )
@@ -70,31 +71,33 @@ func TestCancelCurrentReplay(t *testing.T) {
 func TestExpectedIdentity(t *testing.T) {
 	t.Run("has expected call", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		c := executiontype.NewInMemoryContainer()
+		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
-		f.s.callOrder = make([]moment.Identity, 1)
+		c.AppendCallOrder(moment.Identity{})
 
 		identity, ok := f.ExpectedIdentity(ctx)
 		assert.True(t, ok)
-		assert.Equal(t, f.s.callOrder[0], identity)
+		assert.Equal(t, c.CallOrderAt(0), identity)
 	})
 	t.Run("no expected call", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		c := executiontype.NewInMemoryContainer()
+		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 		f := MustFromContext(ctx)
-
-		f.s.callOrder = make([]moment.Identity, 0)
 
 		_, ok := f.ExpectedIdentity(ctx)
 		assert.False(t, ok)
 	})
 	t.Run("sequence index out of bounds", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		c := executiontype.NewInMemoryContainer()
+		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
-		f.s.callOrder = make([]moment.Identity, 2)
+		c.AppendCallOrder(moment.Identity{})
+		c.AppendCallOrder(moment.Identity{})
 		ctx = sequence.With(ctx, DefaultReplayFlags)
 		for range 10 {
 			sequence.Advance(ctx)
@@ -115,36 +118,34 @@ var placeholderCallable = moment.NewFn[struct{}, struct{}](func(ctx context.Cont
 
 func TestGetMoment(t *testing.T) {
 	ctx := t.Context()
-	ctx = WithFlow(ctx, NewFlowExecution())
+	c := executiontype.NewInMemoryContainer()
+	ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 	f := MustFromContext(ctx)
 	identity := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
 	m := moment.NewMoment(placeholderCallable, 1)
-	f.s.stateCache = map[moment.Identity]*moment.Moment{
-		identity: m,
-	}
-	r, ok := f.GetMoment(identity)
+	c.SetMoment(identity, *m)
+
+	r, ok := f.GetMoment(ctx, identity)
 	assert.True(t, ok)
-	assert.Equal(t, r, m)
-	_, ok = f.GetMoment(moment.Identity{})
+	assert.Equal(t, r, *m)
+	_, ok = f.GetMoment(ctx, moment.Identity{})
 	assert.False(t, ok)
 }
 
 func TestEvictUnseenCachedStates(t *testing.T) {
 	ctx := t.Context()
-	ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+	c := executiontype.NewInMemoryContainer()
+	ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 	f := MustFromContext(ctx)
 	toEvict := moment.NewIdentity(ctx, moment.Callpath{{File: "toEvict"}})
 	toKeep := moment.NewIdentity(ctx, moment.Callpath{{File: "toKeep"}})
-	f.s.stateCache = map[moment.Identity]*moment.Moment{
-		toEvict: nil,
-		toKeep:  nil,
-	}
+	c.SetMoment(toEvict, moment.Moment{})
+	c.SetMoment(toKeep, moment.Moment{})
 	sequence.MarkSeen(ctx, toKeep)
 	f.EvictUnseenCachedStates(ctx)
 
-	assert.Equal(t, map[moment.Identity]*moment.Moment{
-		toKeep: nil,
-	}, f.s.stateCache)
+	assert.False(t, c.HasMoment(toEvict))
+	assert.True(t, c.HasMoment(toKeep))
 }
 
 func TestRestartCurrentReplay(t *testing.T) {
@@ -192,72 +193,73 @@ func TestStartNewReplay(t *testing.T) {
 
 func TestRecordCurrentMoment(t *testing.T) {
 	t.Run("fresh moment case", func(t *testing.T) {
-		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecution()), DefaultReplayFlags)
+		c := executiontype.NewInMemoryContainer()
+		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
 		recordMoment := moment.NewMoment(placeholderCallable, 1)
 
-		f.s.stateCache = make(map[moment.Identity]*moment.Moment)
-
-		f.RecordCurrentMoment(ctx, recordKey, recordMoment)
-		assert.Equal(t, f.s.callOrder[0], recordKey)
+		f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
+		assert.Equal(t, c.CallOrderAt(0), recordKey)
 		assert.Equal(t, sequence.GetIndex(ctx), 0)
-		assert.Equal(t, f.s.stateCache[recordKey], recordMoment)
+		m, _ := c.GetMoment(recordKey)
+		assert.Equal(t, m, *recordMoment)
 	})
 	t.Run("existing moment case", func(t *testing.T) {
-		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecution()), DefaultReplayFlags)
+		c := executiontype.NewInMemoryContainer()
+		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
 		recordMoment := moment.NewMoment(placeholderCallable, 1)
 
-		f.s.stateCache = map[moment.Identity]*moment.Moment{
-			recordKey: recordMoment,
-		}
-		f.s.callOrder = []moment.Identity{recordKey}
+		c.SetMoment(recordKey, *recordMoment)
+		c.AppendCallOrder(recordKey)
 		assert.False(t, sequence.IsSeen(ctx, recordKey))
 
-		f.RecordCurrentMoment(ctx, recordKey, recordMoment)
+		f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
 		assert.True(t, sequence.IsSeen(ctx, recordKey))
-		assert.Equal(t, f.s.callOrder[0], recordKey)
+		assert.Equal(t, c.CallOrderAt(0), recordKey)
 		assert.Equal(t, sequence.GetIndex(ctx), 0)
-		assert.Equal(t, f.s.stateCache[recordKey], recordMoment)
+		m, _ := c.GetMoment(recordKey)
+		assert.Equal(t, m, *recordMoment)
 	})
 	t.Run("unexpected cached state case", func(t *testing.T) {
-		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecution()), DefaultReplayFlags)
+		c := executiontype.NewInMemoryContainer()
+		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
 		recordMoment := moment.NewMoment(placeholderCallable, 1)
 
-		f.s.stateCache = map[moment.Identity]*moment.Moment{
-			recordKey: recordMoment,
-		}
+		c.SetMoment(recordKey, *recordMoment)
 		assert.False(t, sequence.IsSeen(ctx, recordKey))
 
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(UnexpectedCachedStateError{
 			identity: recordKey,
 		}).Error(), func() {
-			f.RecordCurrentMoment(ctx, recordKey, recordMoment)
+			f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
 		})
 	})
 	t.Run("sequence index out of bounds", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		c := executiontype.NewInMemoryContainer()
+		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		ctx = sequence.With(ctx, DefaultReplayFlags)
 		for range 10 {
 			sequence.Advance(ctx)
 		}
-		f.s.callOrder = make([]moment.Identity, 2)
+		c.AppendCallOrder(moment.Identity{})
+		c.AppendCallOrder(moment.Identity{})
 
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
 			sequenceIndex:  10,
 			sequenceLength: 2,
 		}).Error(), func() {
-			f.RecordCurrentMoment(ctx, moment.Identity{}, nil)
+			f.RecordCurrentMoment(ctx, moment.Identity{}, moment.Moment{})
 		})
 	})
 }
@@ -265,15 +267,14 @@ func TestRecordCurrentMoment(t *testing.T) {
 func TestInvalidateMoment(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		c := executiontype.NewInMemoryContainer()
+		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		key := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
-		f.s.stateCache = map[moment.Identity]*moment.Moment{
-			key: nil,
-		}
-		f.InvalidateMoment(key)
-		assert.Equal(t, map[moment.Identity]*moment.Moment{}, f.s.stateCache)
+		c.SetMoment(key, moment.Moment{})
+		f.InvalidateMoment(ctx, key)
+		assert.False(t, c.HasMoment(key))
 	})
 }
 
@@ -290,10 +291,8 @@ func TestMustFromContext(t *testing.T) {
 }
 
 func TestNewFlowExecutionFromState(t *testing.T) {
-	s := FlowExecutionState{
-		stateCache: make(map[moment.Identity]*moment.Moment),
-	}
-	f := NewFlowExecutionFromState(s)
+	c := executiontype.NewInMemoryContainer()
+	f := NewFlowExecutionWithContainer(c)
 	assert.NotNil(t, f)
-	assert.Equal(t, s, f.s)
+	assert.Equal(t, c, f.c)
 }

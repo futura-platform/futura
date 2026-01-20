@@ -8,11 +8,12 @@ import (
 	"sync"
 
 	"github.com/futura-platform/futura/flog"
+	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
-	"github.com/futura-platform/futura/internal/flow/moment"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/goroutinebind"
+	"github.com/futura-platform/futura/moment"
 )
 
 type ctxKey string
@@ -26,41 +27,41 @@ const flowExecutionKey ctxKey = "futura_flow"
 type FlowExecution struct {
 	mu        sync.RWMutex
 	nextFlags replay.Flags
-	s         FlowExecutionState
+	c         executiontype.TransactionalContainer
 }
 
-// State returns the flow execution state.
-// Values returned by this method are gauranteed to be canonical.
-func (f *FlowExecution) State() FlowExecutionState {
+var ErrTransactionFailed = errors.New("transaction failed")
+
+func (f *FlowExecution) mustTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	err := f.c.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error { fn(ctx, tx); return nil })
+	if err != nil {
+		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
+	}
+}
+
+func (f *FlowExecution) mustReadTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.ReadOnlyContainer)) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	return f.s
-}
-
-// FlowExecutionState is the state of the flow execution.
-// All values here should be usable between program instances (i.e. no unsafe pointers, functions, goroutine ids, etc.).
-// This type is designed to be serialized and deserialized to facilitate distributed execution.
-type FlowExecutionState struct {
-	// a map of the step moment identifiers to their memoized moment.
-	stateCache map[moment.Identity]*moment.Moment
-
-	// given a certain state, this sequence should be deterministic.
-	callOrder []moment.Identity
+	err := f.c.ReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error { fn(ctx, tx); return nil })
+	if err != nil {
+		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
+	}
 }
 
 func NewFlowExecution() *FlowExecution {
 	return &FlowExecution{
-		s: FlowExecutionState{
-			stateCache: make(map[moment.Identity]*moment.Moment),
-		},
+		c:         executiontype.NewInMemoryContainer(),
 		nextFlags: DefaultReplayFlags,
 	}
 }
 
-func NewFlowExecutionFromState(s FlowExecutionState) *FlowExecution {
+func NewFlowExecutionWithContainer(c executiontype.TransactionalContainer) *FlowExecution {
 	return &FlowExecution{
-		s:         s,
+		c:         c,
 		nextFlags: DefaultReplayFlags,
 	}
 }
@@ -72,17 +73,18 @@ func WithFlow(ctx context.Context, exec *FlowExecution) context.Context {
 	return context.WithValue(goroutinebind.BindGoroutine(ctx), flowExecutionKey, exec)
 }
 
-func (f *FlowExecution) EvictUnseenCachedStates(replayCtx context.Context) {
-	l := flog.FromContext(replayCtx)
-	for identity := range f.s.stateCache {
-		if sequence.IsSeen(replayCtx, identity) {
-			continue
+func (f *FlowExecution) EvictUnseenCachedStates(ctx context.Context) {
+	l := flog.FromContext(ctx)
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		for identity := range tx.KnownMoments() {
+			if !sequence.IsSeen(ctx, identity) {
+				tx.DeleteMoment(identity)
+				l.LogAttrs(ctx, slog.LevelDebug, "evicted unseen state",
+					slog.String("identity", identity.String()),
+				)
+			}
 		}
-		delete(f.s.stateCache, identity)
-		l.LogAttrs(replayCtx, slog.LevelDebug, "evicted cached state",
-			slog.String("identity", identity.String()),
-		)
-	}
+	})
 }
 
 var (
@@ -130,64 +132,65 @@ func (f *FlowExecution) SetNextFlags(fn func(flags *replay.Flags)) {
 	fn(&f.nextFlags)
 }
 
-func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (moment.Identity, bool) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
+func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.Identity, ok bool) {
 	i := sequence.GetIndex(ctx)
-	if i > len(f.s.callOrder) {
-		panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
-			sequenceIndex:  i,
-			sequenceLength: len(f.s.callOrder),
-		}))
-	} else if i == len(f.s.callOrder) {
-		return moment.Identity{}, false
-	}
+	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
+		size := tx.CallOrderLength()
+		if i > size {
+			panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
+				sequenceIndex:  i,
+				sequenceLength: size,
+			}))
+		} else if i == size {
+			return
+		}
 
-	identity := f.s.callOrder[i]
-	return identity, true
+		identity = tx.CallOrderAt(i)
+		ok = true
+	})
+	return identity, ok
 }
 
-func (f *FlowExecution) GetMoment(identity moment.Identity) (*moment.Moment, bool) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	moment, ok := f.s.stateCache[identity]
+func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity) (moment.Moment, bool) {
+	var moment moment.Moment
+	var ok bool
+	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
+		moment, ok = tx.GetMoment(identity)
+	})
 	return moment, ok
 }
 
-func (f *FlowExecution) InvalidateMoment(identity moment.Identity) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	delete(f.s.stateCache, identity)
+func (f *FlowExecution) InvalidateMoment(ctx context.Context, identity moment.Identity) {
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		tx.DeleteMoment(identity)
+	})
 }
 
 // RecordCurrentMoment stores the current identity+moment (growing the sequence slice if necessary)
 // it also marks the identity as seen.
-func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment *moment.Moment) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	i := sequence.GetIndex(ctx)
-	if i > len(f.s.callOrder) {
-		panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
-			sequenceIndex:  i,
-			sequenceLength: len(f.s.callOrder),
-		}))
-	} else if i == len(f.s.callOrder) {
-		_, ok := f.s.stateCache[identity]
-		if ok {
-			panic(ftrerrors.InconsistentStateError(UnexpectedCachedStateError{
-				identity: identity,
+func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment moment.Moment) {
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		i := sequence.GetIndex(ctx)
+		size := tx.CallOrderLength()
+		if i > size {
+			panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
+				sequenceIndex:  i,
+				sequenceLength: size,
 			}))
+		} else if i == size {
+			ok := tx.HasMoment(identity)
+			if ok {
+				panic(ftrerrors.InconsistentStateError(UnexpectedCachedStateError{
+					identity: identity,
+				}))
+			}
+			tx.AppendCallOrder(identity)
+		} else {
+			tx.SetCallOrderAt(i, identity)
 		}
-		f.s.callOrder = append(f.s.callOrder, identity)
-	} else {
-		f.s.callOrder[i] = identity
-	}
-	sequence.MarkSeen(ctx, identity)
-	f.s.stateCache[identity] = currentMoment
+		tx.SetMoment(identity, currentMoment)
+		sequence.MarkSeen(ctx, identity)
+	})
 }
 
 // FromContext retrieves the flow context from the context.

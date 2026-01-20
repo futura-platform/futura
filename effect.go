@@ -6,7 +6,7 @@ import (
 	"runtime"
 
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/flow/moment"
+	"github.com/futura-platform/futura/moment"
 )
 
 // EffectFn is a function that is has comparable inputs and returns an error.

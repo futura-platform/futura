@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	mapset "github.com/deckarep/golang-set/v2"
-	"github.com/futura-platform/futura/internal/privateencoding"
 	"github.com/futura-platform/futura/internal/utils"
+	"github.com/futura-platform/futura/privateencoding"
 	"github.com/stretchr/testify/assert"
 )
 

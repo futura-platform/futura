@@ -11,7 +11,7 @@ import (
 
 	"github.com/vmihailenco/msgpack/v5"
 
-	privateencodinginternal "github.com/futura-platform/futura/internal/privateencoding/internal"
+	privateencodinginternal "github.com/futura-platform/futura/privateencoding/internal"
 )
 
 // Decoder is used to deserialize values of type T from a binary format,
@@ -36,7 +36,10 @@ func NewDecoder[T any](r io.Reader) *Decoder[T] {
 
 func (d *Decoder[T]) Decode() (T, error) {
 	var v T
-	err := d.decodeValue(reflect.ValueOf(&v).Elem(), "root")
+	err := d.decodeValue(
+		reflect.ValueOf(&v).Elem(),
+		"root",
+	)
 	return v, err
 }
 
