@@ -24,28 +24,30 @@ type fetchRankingsParams struct {
 }
 
 func fetchRankings(ctx context.Context, p fetchRankingsParams) (seal.Sealed[serpRankings], error) {
-	httpClient := useHttpClient(ctx)
+	httpClient, persistCookies := useHttpClient(ctx)
+	defer persistCookies()
+
 	request, err := http.NewRequest("GET", "https://www.google.com/search?q="+p.term, nil)
 	if err != nil {
-		return nil, err
+		return seal.Sealed[serpRankings]{}, err
 	}
 	resp, err := httpClient.Do(request)
 	if err != nil {
-		return nil, err
+		return seal.Sealed[serpRankings]{}, err
 	}
 	defer resp.Body.Close()
 
 	// parse the response body with goquery
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse response body: %w", err)
+		return seal.Sealed[serpRankings]{}, fmt.Errorf("failed to parse response body: %w", err)
 	}
 
 	// detect if we received the JS challenge page, if so then retry initialization
 	if doc.Find("script").FilterFunction(func(i int, s *goquery.Selection) bool {
 		return strings.Contains(s.Text(), `SG_SS=`)
 	}).Length() > 0 {
-		return nil, errChallengePageEncountered
+		return seal.Sealed[serpRankings]{}, errChallengePageEncountered
 	}
 
 	// find the top-level search result anchors
@@ -56,22 +58,22 @@ func fetchRankings(ctx context.Context, p fetchRankingsParams) (seal.Sealed[serp
 
 	// if we can't find any, assume we were hit with a challenge page
 	if resultAnchors.Length() == 0 {
-		return nil, errChallengePageEncountered
+		return seal.Sealed[serpRankings]{}, errChallengePageEncountered
 	}
 
 	topLevelSearchResults := make(serpRankings, resultAnchors.Length())
 	for i, a := range resultAnchors.EachIter() {
 		href, exists := a.Attr("href")
 		if !exists {
-			return nil, fmt.Errorf("search result anchor does not have href attribute")
+			return seal.Sealed[serpRankings]{}, fmt.Errorf("search result anchor does not have href attribute")
 		}
 		u, err := url.Parse(href)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse search result URL: %w", err)
+			return seal.Sealed[serpRankings]{}, fmt.Errorf("failed to parse search result URL: %w", err)
 		}
 		externalUrl, err := url.Parse(u.Query().Get("q"))
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse external URL: %w", err)
+			return seal.Sealed[serpRankings]{}, fmt.Errorf("failed to parse external URL: %w", err)
 		}
 		topLevelSearchResults[i] = serpEntry{
 			Title: a.Find("h3").First().Text(),

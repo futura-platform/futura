@@ -264,6 +264,23 @@ func TestRecordCurrentMoment(t *testing.T) {
 	})
 }
 
+func TestDurable(t *testing.T) {
+	c := executiontype.NewInMemoryContainer()
+	f := NewFlowExecutionWithContainer(c)
+	ctx := sequence.With(WithFlow(t.Context(), f), DefaultReplayFlags)
+	t.Run("returns !ok if the value is not found", func(t *testing.T) {
+		_, ok := f.LoadDurable(ctx, "notFound")
+		assert.False(t, ok)
+	})
+	t.Run("can store and load a value", func(t *testing.T) {
+		value := byte(100)
+		f.StoreDurable(ctx, "test", []byte{value})
+		loaded, ok := f.LoadDurable(ctx, "test")
+		assert.True(t, ok)
+		assert.Equal(t, loaded, []byte{value})
+	})
+}
+
 func TestInvalidateMoment(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()

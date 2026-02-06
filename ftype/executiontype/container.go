@@ -11,6 +11,9 @@ type TransactionalContainer datastore.Transactional[Container, ReadOnlyContainer
 
 // Container is a container for the flow execution state.
 // This allows for the flow execution state to be backed by any transactional storage mechanism.
+// All values in the container are expected to only be accessed by a single thread of execution,
+// so implementing an in-memory fast path is strongly recommended for optimal performance,
+// alongside a durable storage layer for fault tolerance.
 type Container interface {
 	ReadOnlyContainer
 	// call order
@@ -20,6 +23,9 @@ type Container interface {
 	// memo table
 	SetMoment(identity moment.Identity, moment moment.Moment)
 	DeleteMoment(identity moment.Identity)
+
+	// durable state (essentially just a basic key-value store)
+	StoreDurable(key string, value []byte) error
 }
 
 type ReadOnlyContainer interface {
@@ -33,4 +39,7 @@ type ReadOnlyContainer interface {
 
 	// all moments in the memo table that have not been deleted
 	KnownMoments() iter.Seq[moment.Identity]
+
+	// durable state
+	LoadDurable(key string) ([]byte, bool, error)
 }

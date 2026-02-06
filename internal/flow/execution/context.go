@@ -193,6 +193,28 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 	})
 }
 
+func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]byte, bool) {
+	var state []byte
+	var ok bool
+	var err error
+	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
+		state, ok, err = tx.LoadDurable(durableKey)
+	})
+	if err != nil {
+		panic(err)
+	}
+	return state, ok
+}
+
+func (f *FlowExecution) StoreDurable(ctx context.Context, durableKey string, state []byte) {
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		err := tx.StoreDurable(durableKey, state)
+		if err != nil {
+			panic(err)
+		}
+	})
+}
+
 // FromContext retrieves the flow context from the context.
 // It will panic if this is being used in a goroutine other than the one that created the context.
 func FromContext(ctx context.Context) (*FlowExecution, bool) {

@@ -77,10 +77,13 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 	result, err = flow.Loop(
 		execution.WithFlow(ctx, f.exec),
 		func(flowCtx context.Context, args A) (R, error) {
-			return fn(FlowBuilder{unexportedContext{flowCtx}}, args)
+			return fn(newFlowBuilder(flowCtx, f.exec), args)
 		},
 		args,
-		opts...,
+		append(opts,
+			// include the state context by default for convenience
+			stateContext.Provide(),
+		)...,
 	)
 
 	return result, err

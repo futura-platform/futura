@@ -20,7 +20,9 @@ func initializeSession(ctx context.Context, _ struct{}) error {
 		return fmt.Errorf("failed to parse session init location: %w", err)
 	}
 
-	httpClient := useHttpClient(ctx)
+	httpClient, persistCookies := useHttpClient(ctx)
+	defer persistCookies()
+
 	var cookies []*network.Cookie
 	var hasDataVed bool
 	err = chromedp.Run(ctx,

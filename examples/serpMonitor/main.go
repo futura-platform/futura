@@ -3,13 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log"
 	"log/slog"
-	"net/http"
-	"net/http/cookiejar"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -49,34 +45,16 @@ func main() {
 }
 
 func runSerpMonitor(ctx context.Context, term string) error {
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return fmt.Errorf("failed to create cookie jar: %w", err)
-	}
-	httpClient := http.Client{
-		Transport: &http.Transport{
-			// proxying through a local MITM for debugging
-			Proxy: http.ProxyURL(&url.URL{
-				Scheme: "http",
-				Host:   "127.0.0.1:8888",
-			}),
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
-		Jar: jar,
-	}
 	ctx, cancel, err := withBrowserTab(ctx)
 	defer cancel()
 	if err != nil {
 		return err
 	}
 
-	ctx = withHttpClient(ctx, &httpClient)
-
 	_, err = futura.NewFlow[string, []serpEntry]().Execute(ctx,
 		serpMonitorFlow,
 		term,
+		withHttpClient(),
 		ftype.WithOnStepError(func(err error) bool {
 			fmt.Println("error:", err)
 			time.Sleep(time.Second)

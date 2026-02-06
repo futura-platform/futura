@@ -11,11 +11,15 @@ type State struct {
 
 	// given a certain state, this sequence should be deterministic.
 	callOrder []moment.Identity
+
+	// durable state
+	durableState map[string][]byte
 }
 
 func NewState() State {
 	return State{
-		memoTable: make(map[moment.Identity]moment.Moment),
-		callOrder: make([]moment.Identity, 0),
+		memoTable:    make(map[moment.Identity]moment.Moment),
+		callOrder:    make([]moment.Identity, 0),
+		durableState: make(map[string][]byte),
 	}
 }

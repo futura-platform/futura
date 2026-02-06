@@ -12,12 +12,22 @@ type InMemoryContainer struct {
 	State
 }
 
+// LoadDurable implements Container.
+func (i *InMemoryContainer) LoadDurable(key string) ([]byte, bool, error) {
+	value, ok := i.durableState[key]
+	return value, ok, nil
+}
+
+// StoreDurable implements Container.
+func (i *InMemoryContainer) StoreDurable(key string, value []byte) error {
+	i.durableState[key] = value
+	return nil
+}
+
 func NewInMemoryContainer() *InMemoryContainer {
 	return &InMemoryContainer{
 		seenStates: make(map[moment.Identity]bool),
-		State: State{
-			memoTable: make(map[moment.Identity]moment.Moment),
-		},
+		State:      NewState(),
 	}
 }
 

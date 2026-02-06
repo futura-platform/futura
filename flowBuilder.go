@@ -3,6 +3,7 @@ package futura
 import (
 	"context"
 
+	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/moment"
 )
 
@@ -10,6 +11,16 @@ import (
 // It implements context.Context.
 type FlowBuilder struct {
 	unexportedContext
+	execution *execution.FlowExecution
+}
+
+func newFlowBuilder(ctx context.Context, exec *execution.FlowExecution) FlowBuilder {
+	return FlowBuilder{
+		unexportedContext: unexportedContext{
+			Context: ctx,
+		},
+		execution: exec,
+	}
 }
 
 type unexportedContext struct {
@@ -28,9 +39,8 @@ func (b FlowBuilder) WithKey(key any) FlowBuilder {
 }
 
 func (b FlowBuilder) WithContextWrapper(wrapper func(context.Context) context.Context) FlowBuilder {
-	return FlowBuilder{
-		unexportedContext: unexportedContext{
-			Context: wrapper(b),
-		},
+	b.unexportedContext = unexportedContext{
+		Context: wrapper(b),
 	}
+	return b
 }
