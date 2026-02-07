@@ -211,7 +211,7 @@ func TestStep(t *testing.T) {
 		}, nil)
 	})
 
-	t.Run("immedietly returns with the injected error if there is one", func(t *testing.T) {
+	t.Run("immediately returns with the injected error if there is one", func(t *testing.T) {
 		expectedError := errors.New("expected error")
 		ctx := testutil.WithInjectedError(execution.WithFlow(t.Context(), execution.NewFlowExecution()), testutil.InjectedErrorLevelEvaluate, expectedError)
 		_, _, err := Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
