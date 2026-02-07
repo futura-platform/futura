@@ -1,5 +1,6 @@
 # Futura
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/futura-platform/futura)](https://goreportcard.com/report/github.com/futura-platform/futura)
 [![codecov](https://codecov.io/gh/futura-platform/futura/branch/main/graph/badge.svg)](https://codecov.io/gh/futura-platform/futura)
 
 Futura is a Golang library for building web automation workflows.
