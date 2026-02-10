@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/internal/flow/execution"
@@ -15,11 +16,18 @@ type CallableFlow[A, T any] func(ctx context.Context, args A) (T, error)
 // - executing the flow fn
 // - handling errors
 // - rewinding the sequence
-func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A, opts ...ftype.FlowLoopOption) (T, error) {
+func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A, opts ...ftype.FlowLoopOption) (_ T, err error) {
 	f := execution.MustFromContext(ctx)
 	for _, opt := range opts {
 		ctx = opt(ctx)
 	}
+
+	defer func() {
+		// Run execution-end callbacks.
+		if hookErr := ftype.RunOnExecutionEnd(ctx, err); hookErr != nil {
+			err = errors.Join(err, fmt.Errorf("execution end hooks: %w", hookErr))
+		}
+	}()
 
 	for {
 	restartReplay:

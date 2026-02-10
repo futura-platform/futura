@@ -80,3 +80,73 @@ func TestWithLogger(t *testing.T) {
 		assert.Positive(t, logBuf.Len())
 	})
 }
+
+func TestWithOnExecutionEnd(t *testing.T) {
+	t.Run("WithOnExecutionEnd should be called when the flow execution ends successfully", func(t *testing.T) {
+		callCount := 0
+		var gotErr error
+
+		r, err := futura.NewFlow[*any, string]().Execute(
+			t.Context(),
+			func(b futura.FlowBuilder, _ *any) (string, error) {
+				return "success", nil
+			},
+			nil,
+			ftype.WithOnExecutionEnd(func(ctx context.Context, err error) error {
+				callCount++
+				gotErr = err
+				return nil
+			}),
+		)
+		assert.NoError(t, err)
+		assert.Equal(t, "success", r)
+		assert.Equal(t, 1, callCount)
+		assert.NoError(t, gotErr)
+	})
+
+	t.Run("WithOnExecutionEnd should be called when the flow execution ends with an error", func(t *testing.T) {
+		callCount := 0
+		var gotErr error
+
+		r, err := futura.NewFlow[*any, string]().Execute(
+			t.Context(),
+			func(b futura.FlowBuilder, _ *any) (string, error) {
+				return "cancelled", ftype.ErrCancelFlow
+			},
+			nil,
+			ftype.WithOnExecutionEnd(func(ctx context.Context, err error) error {
+				callCount++
+				gotErr = err
+				return nil
+			}),
+		)
+		assert.ErrorIs(t, err, ftype.ErrCancelFlow)
+		assert.Equal(t, "cancelled", r)
+		assert.Equal(t, 1, callCount)
+		assert.ErrorIs(t, gotErr, ftype.ErrCancelFlow)
+	})
+
+	t.Run("Multiple WithOnExecutionEnd options should be called reverse of their registration order", func(t *testing.T) {
+		callOrder := []string{}
+		onEnd1 := func(ctx context.Context, err error) error {
+			callOrder = append(callOrder, "onEnd1")
+			return nil
+		}
+		onEnd2 := func(ctx context.Context, err error) error {
+			callOrder = append(callOrder, "onEnd2")
+			return nil
+		}
+
+		_, err := futura.NewFlow[*any, string]().Execute(
+			t.Context(),
+			func(b futura.FlowBuilder, _ *any) (string, error) {
+				return "success", nil
+			},
+			nil,
+			ftype.WithOnExecutionEnd(onEnd1),
+			ftype.WithOnExecutionEnd(onEnd2),
+		)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"onEnd2", "onEnd1"}, callOrder)
+	})
+}
