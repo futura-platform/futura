@@ -78,6 +78,15 @@ func implementsBinaryUnmarshaler(v reflect.Value) (func() encoding.BinaryUnmarsh
 
 func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 	uv := privateencodinginternal.UnsafeValue(v)
+
+	// Ignore lock-like, non-copyable structures (e.g. sync.Mutex). These fields
+	// are not part of logical state and are intentionally not serialized.
+	if isNoCopyStructType(uv.Type()) {
+		if uv.CanSet() {
+			uv.Set(reflect.Zero(uv.Type()))
+		}
+		return nil
+	}
 	if getUnmarshaler, ok := implementsBinaryUnmarshaler(uv); ok {
 		var size int
 		if err := d.mustDecodeSimple(&size); err != nil {

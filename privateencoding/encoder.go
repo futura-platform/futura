@@ -87,6 +87,13 @@ var anyType = reflect.TypeOf((*any)(nil)).Elem()
 func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 	uv := privateencodinginternal.UnsafeValue(v)
 
+	// Ignore lock-like, non-copyable structures (e.g. sync.Mutex). These fields
+	// are not part of logical state and their internal state can change
+	// nondeterministically.
+	if isNoCopyStructType(uv.Type()) {
+		return nil
+	}
+
 	if getMarshaler, ok := implementsBinaryMarshaler(uv); ok {
 		data, err := getMarshaler().MarshalBinary()
 		if err != nil {
