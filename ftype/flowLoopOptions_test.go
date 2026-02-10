@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -124,6 +125,39 @@ func TestWithOnExecutionEnd(t *testing.T) {
 		assert.Equal(t, "cancelled", r)
 		assert.Equal(t, 1, callCount)
 		assert.ErrorIs(t, gotErr, ftype.ErrCancelFlow)
+	})
+
+	t.Run("WithOnExecutionEnd's error should be joined with the flow error", func(t *testing.T) {
+		onEndError := errors.New("onEnd error")
+		insturmentForTestOpt := ftype.WithOnExecutionEnd(func(ctx context.Context, err error) error {
+			return onEndError
+		})
+		t.Run("when the flow error is nil", func(t *testing.T) {
+			flowErr := errors.New("flow error")
+			r, err := futura.NewFlow[*any, string]().Execute(
+				t.Context(),
+				func(b futura.FlowBuilder, _ *any) (string, error) {
+					return "expected", fmt.Errorf("%w: %w", ftype.ErrCancelFlow, flowErr)
+				},
+				nil,
+				insturmentForTestOpt,
+			)
+			assert.ErrorIs(t, err, flowErr)
+			assert.ErrorIs(t, err, onEndError)
+			assert.Equal(t, "expected", r)
+		})
+		t.Run("when the flow error is not nil", func(t *testing.T) {
+			r, err := futura.NewFlow[*any, string]().Execute(
+				t.Context(),
+				func(b futura.FlowBuilder, _ *any) (string, error) {
+					return "expected", nil
+				},
+				nil,
+				insturmentForTestOpt,
+			)
+			assert.ErrorIs(t, err, onEndError)
+			assert.Equal(t, "expected", r)
+		})
 	})
 
 	t.Run("Multiple WithOnExecutionEnd options should be called reverse of their registration order", func(t *testing.T) {

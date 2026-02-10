@@ -37,6 +37,7 @@ var serpMonitorCookieJarHandle = futura.NewDurableHandle[cookiejar.Jar](
 		}
 		return buf.Bytes(), nil
 	},
+	nil,
 )
 
 var serpMonitorHTTPTransport = &http.Transport{

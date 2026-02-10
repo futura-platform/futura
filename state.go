@@ -47,6 +47,7 @@ var stateContext = NewDurableHandle(
 	func(data *map[string][]byte) ([]byte, error) {
 		return msgpack.Marshal(*data)
 	},
+	nil,
 )
 
 var (
