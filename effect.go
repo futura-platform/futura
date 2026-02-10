@@ -26,3 +26,12 @@ func Effect[A comparable](b FlowBuilder, fn EffectFn[A], args A, options ...ftyp
 	}, args, opts...)
 	return err
 }
+
+type ActionFn func(ctx context.Context) error
+
+// Action is a helper function for Effects that don't have any arguments.
+func Action(b FlowBuilder, fn ActionFn, options ...ftype.MomentFnOption) error {
+	return Effect(b, func(ctx context.Context, _ struct{}) error {
+		return fn(ctx)
+	}, struct{}{}, options...)
+}

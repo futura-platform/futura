@@ -67,3 +67,17 @@ func TestEffect(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestAction(t *testing.T) {
+	t.Run("Action executes the function and returns nil on success", func(t *testing.T) {
+		calls := 0
+		_, err := futura.NewFlow[struct{}, struct{}]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (struct{}, error) {
+			return struct{}{}, futura.Action(b, func(ctx context.Context) error {
+				calls++
+				return nil
+			})
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, calls)
+	})
+}
