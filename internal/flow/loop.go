@@ -8,9 +8,14 @@ import (
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/step"
 )
 
 type CallableFlow[A, T any] func(ctx context.Context, args A) (T, error)
+
+var (
+	ErrOccurredOutsideOfEvaluation = errors.New("error occurred outside of step evaluation")
+)
 
 // Loop implements the core logic of the flow. It is responsible for:
 // - executing the flow fn
@@ -46,6 +51,10 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		} else if errors.Is(err, ftype.ErrCancelFlow) {
 			// special case to immedieately return the error from the loop.
 			return result, err
+		} else if !errors.Is(err, step.ErrEvalFailed) {
+			// if this error did not come from a step evaluation failure, the flow loop should be broken.
+			// Since the flow fn is expected to be pure outside of steps, any error is expected to be unrecoverable.
+			return result, fmt.Errorf("%w: %w", ErrOccurredOutsideOfEvaluation, err)
 		}
 
 		// perform eviction here, after potential replays are completed

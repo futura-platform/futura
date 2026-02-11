@@ -47,7 +47,7 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, "expected", r)
 	})
 
-	t.Run("Regular error handling", func(t *testing.T) {
+	t.Run("Regular error handling for evaluation failures (should retry)", func(t *testing.T) {
 		testErr := errors.New("test error")
 		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
 
@@ -59,13 +59,26 @@ func TestLoopFlow(t *testing.T) {
 				if fnCallCount >= 2 {
 					return "result", nil
 				}
-				return "", testErr
+				return "", fmt.Errorf("%w: %w", step.ErrEvalFailed, testErr)
 			},
 			&struct{}{},
 		)
 		assert.Equal(t, 2, fnCallCount)
 		assert.Equal(t, "result", rval)
 		assert.NoError(t, err)
+	})
+
+	t.Run("Regular error handling for non-evaluation failures (should not retry)", func(t *testing.T) {
+		testErr := errors.New("test error")
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		fnCallCount := 0
+		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			fnCallCount++
+			return "", testErr
+		}, &struct{}{})
+		assert.ErrorIs(t, err, testErr)
+		assert.ErrorIs(t, err, flow.ErrOccurredOutsideOfEvaluation)
+		assert.Equal(t, 1, fnCallCount)
 	})
 
 	t.Run("Context error handling", func(t *testing.T) {
