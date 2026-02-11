@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -47,6 +48,27 @@ func TestState(t *testing.T) {
 			state.Set(2)
 			return state.V(), nil
 		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 2, r)
+	})
+	t.Run("state is restored after execution is restarted from the same container", func(t *testing.T) {
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			state := futura.State(b, 1)
+			if state.V() == 1 {
+				state.Set(2)
+			}
+			return state.V(), nil
+		}
+
+		originalContainer := executiontype.NewInMemoryContainer()
+
+		r, err := futura.NewFlowFromContainer[struct{}, int](originalContainer).Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 2, r)
+
+		// Simulate handing execution state to another machine/process by creating
+		// a new flow instance over the persisted execution container.
+		r, err = futura.NewFlowFromContainer[struct{}, int](originalContainer).Execute(t.Context(), flowFn, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 2, r)
 	})
