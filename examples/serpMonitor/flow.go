@@ -10,6 +10,7 @@ import (
 )
 
 func serpMonitorFlow(b futura.FlowBuilder, term string) ([]serpEntry, error) {
+	b = withHttpClient(b)
 	sessionValid := futura.State(b, true)
 
 	if !sessionValid.V() {

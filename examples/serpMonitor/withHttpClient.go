@@ -10,7 +10,6 @@ import (
 	"net/url"
 
 	"github.com/futura-platform/futura"
-	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/privateencoding"
 )
 
@@ -53,8 +52,8 @@ var serpMonitorHTTPTransport = &http.Transport{
 
 // withHttpClient provides the durable cookie jar resolver to the flow.
 // Call useHttpClient(ctx) inside steps/effects to retrieve a client and persist func.
-func withHttpClient() ftype.FlowLoopOption {
-	return serpMonitorCookieJarHandle.Provide()
+func withHttpClient(b futura.FlowBuilder) futura.FlowBuilder {
+	return serpMonitorCookieJarHandle.Provide(b)
 }
 
 func useHttpClient(ctx context.Context) (client *http.Client, persistCookies func() bool) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
 )
@@ -77,13 +78,13 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 	result, err = flow.Loop(
 		execution.WithFlow(ctx, f.exec),
 		func(flowCtx context.Context, args A) (R, error) {
-			return fn(newFlowBuilder(flowCtx, f.exec), args)
+			b := newFlowBuilder(flowCtx, f.exec)
+			// include the state context by default for convenience
+			b = stateContext.Provide(b)
+			return fn(b, args)
 		},
 		args,
-		append(opts,
-			// include the state context by default for convenience
-			stateContext.Provide(),
-		)...,
+		append(opts, durable.WithHandlesCache())...,
 	)
 
 	return result, err

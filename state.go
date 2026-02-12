@@ -34,7 +34,7 @@ func (s stateContainerImplementation[T]) Set(value T) {
 	s.setState(value)
 }
 
-var stateContext = NewDurableHandle(
+var stateContext = NewDurableHandle[map[string][]byte](
 	"state",
 	func() *map[string][]byte {
 		return &map[string][]byte{}

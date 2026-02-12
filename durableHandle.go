@@ -9,14 +9,13 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
 )
 
-type durableKey string
-
 type DurableHandle[T any] struct {
 	id  int32
-	key durableKey
+	key durable.HandleKey
 
 	constructor func() *T
 	unmarshal   func([]byte) (*T, error)
@@ -44,7 +43,7 @@ func NewDurableHandle[T any](
 ) *DurableHandle[T] {
 	return &DurableHandle[T]{
 		id:          handleSequence.Add(1),
-		key:         durableKey(key),
+		key:         durable.HandleKey(key),
 		constructor: constructor,
 		unmarshal:   unmarshal,
 		marshal:     marshal,
@@ -110,24 +109,35 @@ func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *
 
 var (
 	ErrDurableResolverAlreadyProvided = errors.New("durable resolver already provided")
+	ErrDurableHandlesNotFound         = errors.New("durable handles not found")
 )
 
-// Provide returns a FlowLoopOption that will provide the durable resolver to the flow.
+// Provide wraps the FlowBuilder with a context that will provide the durable resolver to the flow.
 // Once a value pointer is resolved either via loading from the execution container or via the constructor,
 // it is cached and will be returned by subsequent calls to the resolver.
 // If this cached pointer is non nil by the time execution ends, it will be passed into a cleanup function call.
-func (d *DurableHandle[T]) Provide() ftype.FlowLoopOption {
-	return func(ctx context.Context) context.Context {
-		// first check if the context already has a value for this key
-		if ctx.Value(d.key) != nil {
-			panic(fmt.Errorf("%w: %s", ErrDurableResolverAlreadyProvided, d.key))
-		}
+func (d *DurableHandle[T]) Provide(b FlowBuilder) FlowBuilder {
+	// first check if the context already has a value for this key
+	if b.Value(d.key) != nil {
+		panic(fmt.Errorf("%w: %s", ErrDurableResolverAlreadyProvided, d.key))
+	}
 
-		resolver := &durableResolver[T]{
+	// first load the handle cache
+	handles, ok := durable.GetHandles(b)
+	if !ok {
+		panic(fmt.Errorf("%w: %s", ErrDurableHandlesNotFound, d.key))
+	}
+
+	// either load the existing resolver, or create a new one
+	anyResolver, _ := handles.LoadOrCompute(d.key, func() (any, bool) {
+		return &durableResolver[T]{
 			handleId: d.id,
-		}
-		ctx = context.WithValue(ctx, d.key, resolver)
+		}, false
+	})
+	resolver := anyResolver.(*durableResolver[T])
 
+	// provide the resolver to the flow
+	return b.WithContextWrapper(func(ctx context.Context) context.Context {
 		// Optionally register cleanup to run at execution end.
 		ctx = ftype.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
 			if d.cleanup == nil {
@@ -142,9 +152,8 @@ func (d *DurableHandle[T]) Provide() ftype.FlowLoopOption {
 			}
 			return d.cleanup(v)
 		})(ctx)
-
-		return ctx
-	}
+		return context.WithValue(ctx, d.key, resolver)
+	})
 }
 
 var (
