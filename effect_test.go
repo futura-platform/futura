@@ -18,6 +18,14 @@ func myNamedEffectFn(ctx context.Context, _ struct{}) error {
 	return errors.New("effect error")
 }
 
+func myNamedSourceFn(ctx context.Context) (struct{}, error) {
+	return struct{}{}, errors.New("source error")
+}
+
+func myNamedActionFn(ctx context.Context) error {
+	return errors.New("action error")
+}
+
 func TestEffect(t *testing.T) {
 	t.Run("Effect executes the function and returns nil on success", func(t *testing.T) {
 		called := false
@@ -68,6 +76,57 @@ func TestEffect(t *testing.T) {
 	})
 }
 
+func TestSource(t *testing.T) {
+	t.Run("Source executes the function and returns output on success", func(t *testing.T) {
+		called := false
+		output, err := futura.NewFlow[struct{}, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (string, error) {
+			return futura.Source(b, func(ctx context.Context) (string, error) {
+				called = true
+				return "source output", nil
+			})
+		}, struct{}{})
+
+		assert.NoError(t, err)
+		assert.Equal(t, "source output", output)
+		assert.True(t, called, "source function was not called")
+	})
+
+	t.Run("Source propagates errors from the function", func(t *testing.T) {
+		expectedErr := errors.New("source error")
+		_, err := futura.NewFlow[struct{}, struct{}]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (struct{}, error) {
+			_, err := futura.Source(b, func(ctx context.Context) (struct{}, error) {
+				return struct{}{}, expectedErr
+			})
+			assert.ErrorIs(t, err, expectedErr)
+			return struct{}{}, nil
+		}, struct{}{})
+
+		assert.NoError(t, err)
+	})
+
+	t.Run("Source uses compile-time label from the original function, not the anonymous wrapper", func(t *testing.T) {
+		label := moment.CompileTimeLabel(runtime.FuncForPC(reflect.ValueOf(myNamedSourceFn).Pointer()))
+		_, err := futura.NewFlow[struct{}, struct{}]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (struct{}, error) {
+			_, err := futura.Source(b, myNamedSourceFn)
+			assert.ErrorIs(t, err, step.ErrEvalFailed)
+			assert.ErrorContains(t, err, label)
+			return struct{}{}, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+	})
+
+	t.Run("Source uses user-provided label when specified", func(t *testing.T) {
+		label := "testLabel"
+		_, err := futura.NewFlow[struct{}, struct{}]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (struct{}, error) {
+			_, err := futura.Source(b, myNamedSourceFn, ftype.WithLabel(label))
+			assert.ErrorIs(t, err, step.ErrEvalFailed)
+			assert.ErrorContains(t, err, label)
+			return struct{}{}, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+	})
+}
+
 func TestAction(t *testing.T) {
 	t.Run("Action executes the function and returns nil on success", func(t *testing.T) {
 		calls := 0
@@ -79,5 +138,27 @@ func TestAction(t *testing.T) {
 		}, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("Action uses compile-time label from the original function, not the anonymous wrapper", func(t *testing.T) {
+		label := moment.CompileTimeLabel(runtime.FuncForPC(reflect.ValueOf(myNamedActionFn).Pointer()))
+		_, err := futura.NewFlow[struct{}, struct{}]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (struct{}, error) {
+			err := futura.Action(b, myNamedActionFn)
+			assert.ErrorIs(t, err, step.ErrEvalFailed)
+			assert.ErrorContains(t, err, label)
+			return struct{}{}, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+	})
+
+	t.Run("Action uses user-provided label when specified", func(t *testing.T) {
+		label := "testLabel"
+		_, err := futura.NewFlow[struct{}, struct{}]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (struct{}, error) {
+			err := futura.Action(b, myNamedActionFn, ftype.WithLabel(label))
+			assert.ErrorIs(t, err, step.ErrEvalFailed)
+			assert.ErrorContains(t, err, label)
+			return struct{}{}, nil
+		}, struct{}{})
+		assert.NoError(t, err)
 	})
 }
