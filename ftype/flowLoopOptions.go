@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"runtime"
 
-	flog_internal "github.com/futura-platform/futura/internal/flog"
+	"github.com/futura-platform/futura/flog"
 	stepwrapper "github.com/futura-platform/futura/internal/step/wrapper"
 )
 
@@ -15,7 +15,7 @@ type FlowLoopOption func(context.Context) context.Context
 
 func WithLogger(logger *slog.Logger) FlowLoopOption {
 	return func(ctx context.Context) context.Context {
-		return flog_internal.WithLogger(ctx, logger)
+		return flog.WithLogger(ctx, logger)
 	}
 }
 
