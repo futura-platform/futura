@@ -14,6 +14,7 @@ import (
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/futura-platform/futura/moment"
+	"github.com/futura-platform/futura/privateencoding"
 	"k8s.io/utils/diff"
 )
 
@@ -94,6 +95,10 @@ func evaluateWithCallstack[A comparable, R comparable](
 			),
 		)))
 	}
+
+	// register input and output types so moments can be properly serialized/deserialized
+	privateencoding.Register[A]()
+	privateencoding.Register[R]()
 
 	// then get the moment from the cache
 	currentMomentValue, ok := f.GetMoment(ctx, identity)

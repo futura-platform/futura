@@ -2,7 +2,6 @@ package privateencoding
 
 import (
 	"encoding"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -19,10 +18,7 @@ import (
 // Encoder is used to serialize values of type T to a binary format,
 // it serializes exported AND unexported fields of the type T.
 type Encoder[T any] struct {
-	w                io.Writer
-	interfaceEncoder interface {
-		EncodeValue(v reflect.Value) error
-	}
+	w io.Writer
 	// msgpackEncoder is used as a fast path for primitive leaf values
 	// (ints, floats, bools, strings, []byte) at any depth.
 	msgpackEncoder *msgpack.Encoder
@@ -30,9 +26,8 @@ type Encoder[T any] struct {
 
 func NewEncoder[T any](w io.Writer) *Encoder[T] {
 	return &Encoder[T]{
-		w:                w,
-		interfaceEncoder: gob.NewEncoder(w),
-		msgpackEncoder:   msgpack.NewEncoder(w),
+		w:              w,
+		msgpackEncoder: msgpack.NewEncoder(w),
 	}
 }
 
@@ -44,8 +39,6 @@ func (e *Encoder[T]) Encode(data T) error {
 		"root",
 	)
 }
-
-type Kind byte
 
 func init() {
 	// Force the local time zone to be loaded once at startup to avoid
@@ -70,19 +63,41 @@ func (e *Encoder[T]) encodeSimple(data any) (err error, isSimple bool) {
 	}
 }
 
-var binaryMarshalerType = reflect.TypeOf((*encoding.BinaryMarshaler)(nil)).Elem()
+var binaryMarshalerType = reflect.TypeFor[encoding.BinaryMarshaler]()
 
 func implementsBinaryMarshaler(v reflect.Value) (func() encoding.BinaryMarshaler, bool) {
-	// gob should handle interface serialization, so we don't need to handle it here
-	// if t.Kind() == reflect.Interface && !v.IsNil() {
-	// 	v = v.Elem()
-	// }
 	return func() encoding.BinaryMarshaler {
 		return v.Interface().(encoding.BinaryMarshaler)
 	}, v.Type().Implements(binaryMarshalerType)
 }
 
-var anyType = reflect.TypeOf((*any)(nil)).Elem()
+func (e *Encoder[T]) encodeInterface(v reflect.Value, path string) error {
+	isNil := v.IsNil()
+	if err := e.mustEncodeSimple(isNil); err != nil {
+		return encodePathError(path+" == nil", err)
+	} else if isNil {
+		return nil
+	}
+
+	concreteValue := privateencodinginternal.UnsafeValue(v.Elem())
+	typeName, ok := lookupRegisteredTypeName(concreteValue.Type())
+	if !ok {
+		return encodePathError(path+".(type)", fmt.Errorf(
+			"%w: %s",
+			errInterfaceTypeNotRegistered,
+			concreteValue.Type().String(),
+		))
+	}
+
+	if err := e.mustEncodeSimple(typeName); err != nil {
+		return encodePathError(path+".(type)", err)
+	}
+
+	return e.encodeValue(
+		concreteValue,
+		path+".("+typeName+")",
+	)
+}
 
 func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 	uv := privateencodinginternal.UnsafeValue(v)
@@ -107,8 +122,7 @@ func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 		return nil
 	}
 	if uv.Kind() == reflect.Interface {
-		// let gob handle interface serialization
-		return encodePathError(path, e.interfaceEncoder.EncodeValue(uv))
+		return e.encodeInterface(uv, path)
 	}
 
 	// first try to encode through the fast binary encoder

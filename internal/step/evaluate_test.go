@@ -60,7 +60,7 @@ func TestStep(t *testing.T) {
 
 			expectedError := errors.New("expectedError")
 			callCount := 0
-			fn := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+			fn := moment.NewFn(func(ctx context.Context, _ struct{}) (*struct{}, error) {
 				callCount++
 				return nil, expectedError
 			})
@@ -114,10 +114,10 @@ func TestStep(t *testing.T) {
 				})
 				ctx = f.StartNewReplay(ctx)
 
-				fn1 := func(ctx context.Context, _ struct{}) (any, error) {
+				fn1 := func(ctx context.Context, _ struct{}) (*struct{}, error) {
 					return nil, nil
 				}
-				fn2 := func(ctx context.Context, _ struct{}) (any, error) {
+				fn2 := func(ctx context.Context, _ struct{}) (*struct{}, error) {
 					return nil, nil
 				}
 
@@ -148,11 +148,11 @@ func TestStep(t *testing.T) {
 				})
 				ctx = f.StartNewReplay(ctx)
 
-				fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+				fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (*struct{}, error) {
 					return nil, nil
 				})
 				branch1 := []runtime.Frame{{File: "code.go", Line: 1}}
-				fn2 := moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+				fn2 := moment.NewFn(func(ctx context.Context, _ struct{}) (*struct{}, error) {
 					return nil, nil
 				})
 				branch2 := []runtime.Frame{{File: "code.go", Line: 2}}
@@ -178,7 +178,7 @@ func TestStep(t *testing.T) {
 		replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
 			f := execution.MustFromContext(ctx)
 			ctx = f.StartNewReplay(ctx)
-			_, _, err := evaluateWithCallstack(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+			_, _, err := evaluateWithCallstack(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (*struct{}, error) {
 				return nil, testErr
 			}, ftype.WithLabel(label)), struct{}{}, mockStableCallstack)
 			assert.ErrorIs(t, err, ErrEvalFailed)

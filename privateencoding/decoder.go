@@ -3,7 +3,6 @@ package privateencoding
 import (
 	"encoding"
 	"encoding/binary"
-	"encoding/gob"
 	"fmt"
 	"io"
 	"reflect"
@@ -17,10 +16,7 @@ import (
 // Decoder is used to deserialize values of type T from a binary format,
 // it deserializes exported AND unexported fields of the type T.
 type Decoder[T any] struct {
-	r                io.Reader
-	interfaceDecoder interface {
-		DecodeValue(v reflect.Value) error
-	}
+	r io.Reader
 	// msgpackDecoder is used as a fast path for primitive leaf values
 	// (ints, floats, bools, strings, []byte) at any depth.
 	msgpackDecoder *msgpack.Decoder
@@ -28,9 +24,8 @@ type Decoder[T any] struct {
 
 func NewDecoder[T any](r io.Reader) *Decoder[T] {
 	return &Decoder[T]{
-		r:                r,
-		interfaceDecoder: gob.NewDecoder(r),
-		msgpackDecoder:   msgpack.NewDecoder(r),
+		r:              r,
+		msgpackDecoder: msgpack.NewDecoder(r),
 	}
 }
 
@@ -68,12 +63,52 @@ func (d *Decoder[T]) mustDecodeSimple(v any) error {
 	return nil
 }
 
-var binaryUnmarshalerType = reflect.TypeOf((*encoding.BinaryUnmarshaler)(nil)).Elem()
+var binaryUnmarshalerType = reflect.TypeFor[encoding.BinaryUnmarshaler]()
 
 func implementsBinaryUnmarshaler(v reflect.Value) (func() encoding.BinaryUnmarshaler, bool) {
 	return func() encoding.BinaryUnmarshaler {
 		return v.Addr().Interface().(encoding.BinaryUnmarshaler)
 	}, v.CanAddr() && v.Addr().Type().Implements(binaryUnmarshalerType)
+}
+
+func (d *Decoder[T]) decodeInterface(v reflect.Value, path string) error {
+	var isNil bool
+	if err := d.mustDecodeSimple(&isNil); err != nil {
+		return decodePathError(path+" == nil", err)
+	}
+	if isNil {
+		v.Set(reflect.Zero(v.Type()))
+		return nil
+	}
+
+	var typeName string
+	if err := d.mustDecodeSimple(&typeName); err != nil {
+		return decodePathError(path+".(type)", err)
+	}
+	registeredType, ok := lookupRegisteredType(typeName)
+	if !ok {
+		return decodePathError(path+".(type)", fmt.Errorf(
+			"%w: %s",
+			errInterfaceTypeNotRegistered,
+			typeName,
+		))
+	}
+
+	decodedValue := reflect.New(registeredType).Elem()
+	if err := d.decodeValue(decodedValue, path+".("+typeName+")"); err != nil {
+		return err
+	}
+
+	if !decodedValue.Type().AssignableTo(v.Type()) {
+		return decodePathError(path, fmt.Errorf(
+			"%w: %s -> %s",
+			errInterfaceTypeMismatch,
+			decodedValue.Type().String(),
+			v.Type().String(),
+		))
+	}
+	v.Set(decodedValue)
+	return nil
 }
 
 func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
@@ -102,10 +137,7 @@ func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 		return nil
 	}
 	if uv.Kind() == reflect.Interface {
-		if err := d.interfaceDecoder.DecodeValue(uv); err != nil {
-			return decodePathError(path, err)
-		}
-		return nil
+		return d.decodeInterface(uv, path)
 	}
 
 	// first try to decode through the fast primitive decoder

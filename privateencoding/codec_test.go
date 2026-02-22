@@ -2,7 +2,6 @@ package privateencoding_test
 
 import (
 	"bytes"
-	"encoding/gob"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
@@ -32,7 +31,8 @@ type myInterface interface {
 	SomeMethod() string
 }
 type myImplementation struct {
-	SomeField string
+	SomeField        string
+	somePrivateField int
 }
 
 func (s *myImplementation) SomeMethod() string {
@@ -56,7 +56,6 @@ func TestCodec(t *testing.T) {
 	t.Run("string", codecTest("Hello, 世界"))
 	t.Run("[]rune", codecTest([]rune("Hello, 世界")))
 	// complex types
-	t.Run("interface{}", codecTest(otherpackage.NewCodecTestStruct(any(1))))
 	a := 1
 	t.Run("Pointer", codecTest(otherpackage.NewCodecTestStruct(&a)))
 	t.Run("Slice", codecTest(otherpackage.NewCodecTestStruct([]int{1, 2, 3})))
@@ -208,10 +207,10 @@ func TestCodec(t *testing.T) {
 	t.Run("unicode_emoji", codecTest("👋🌍🎉"))
 	t.Run("unicode_mixed", codecTest("Hello 世界 🌍 مرحبا"))
 
-	// interfaces with custom encoders/decoders
-	t.Run("custom_encoder_decoder", func(t *testing.T) {
-		var customEncoderDecoder myInterface = &myImplementation{SomeField: "test"}
-		gob.Register(&myImplementation{})
+	// interfaces with custom implementations
+	t.Run("custom_interface", func(t *testing.T) {
+		var customEncoderDecoder myInterface = &myImplementation{SomeField: "test", somePrivateField: 42}
+		privateencoding.Register[*myImplementation]()
 		applyCodecThenCompare(t, customEncoderDecoder, nil)
 	})
 

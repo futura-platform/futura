@@ -2,7 +2,6 @@ package privateencoding_test
 
 import (
 	"bytes"
-	"encoding/gob"
 	"testing"
 	"time"
 
@@ -146,7 +145,7 @@ func BenchmarkEncodeDecodeInterface(b *testing.B) {
 }
 
 func BenchmarkCustomEncoderDecoder(b *testing.B) {
-	gob.Register(&myImplementation{})
+	privateencoding.Register[*myImplementation]()
 	var customEncoderDecoder myInterface = &myImplementation{SomeField: "test"}
 	benchmarkEncodeDecode(b, customEncoderDecoder)
 }

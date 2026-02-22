@@ -122,7 +122,7 @@ func TestFlow(t *testing.T) {
 	t.Run("A single keyed moment identity should be able to be used with a single moment function, and have memoization keyed by the identity key", func(t *testing.T) {
 		expectedExecCount := 10
 		execCount := 0
-		fn := func(ctx context.Context, args any) error {
+		fn := func(ctx context.Context, _ *struct{}) error {
 			execCount++
 			return nil
 		}
