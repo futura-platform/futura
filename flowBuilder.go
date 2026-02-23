@@ -33,14 +33,12 @@ var _ context.Context = FlowBuilder{}
 // This is useful for looping flows, in order to identify the current iteration.
 // (similar to "key" in React)
 func (b FlowBuilder) WithKey(key any) FlowBuilder {
-	return b.WithContextWrapper(func(ctx context.Context) context.Context {
-		return moment.WithIdentityKey(ctx, key)
-	})
+	return b.WithContext(moment.WithIdentityKey(b, key))
 }
 
-func (b FlowBuilder) WithContextWrapper(wrapper func(context.Context) context.Context) FlowBuilder {
+func (b FlowBuilder) WithContext(ctx context.Context) FlowBuilder {
 	b.unexportedContext = unexportedContext{
-		Context: wrapper(b),
+		Context: ctx,
 	}
 	return b
 }

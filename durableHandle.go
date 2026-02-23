@@ -112,18 +112,26 @@ var (
 	ErrDurableHandlesNotFound         = errors.New("durable handles not found")
 )
 
-// Provide wraps the FlowBuilder with a context that will provide the durable resolver to the flow.
+// Provide is a convenience wrapper with the same semantics as ProvideContext, but for FlowBuilder.
+// This function should be used in flow functions.
+func (d *DurableHandle[T]) Provide(b FlowBuilder) FlowBuilder {
+	// provide the resolver to the flow
+	return b.WithContext(d.ProvideContext(b))
+}
+
+// ProvideContext wraps the context with a context that will provide the durable resolver to the flow.
 // Once a value pointer is resolved either via loading from the execution container or via the constructor,
 // it is cached and will be returned by subsequent calls to the resolver.
 // If this cached pointer is non nil by the time execution ends, it will be passed into a cleanup function call.
-func (d *DurableHandle[T]) Provide(b FlowBuilder) FlowBuilder {
+// As opposed to Provide, this function should be used when a FlowBuilder is not available, like in a stateful ftype.FlowLoopOption. (ftype/withMaxFailures.go uses this)
+func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 	// first check if the context already has a value for this key
-	if b.Value(d.key) != nil {
+	if ctx.Value(d.key) != nil {
 		panic(fmt.Errorf("%w: %s", ErrDurableResolverAlreadyProvided, d.key))
 	}
 
 	// first load the handle cache
-	handles, ok := durable.GetHandles(b)
+	handles, ok := durable.GetHandles(ctx)
 	if !ok {
 		panic(fmt.Errorf("%w: %s", ErrDurableHandlesNotFound, d.key))
 	}
@@ -136,24 +144,21 @@ func (d *DurableHandle[T]) Provide(b FlowBuilder) FlowBuilder {
 	})
 	resolver := anyResolver.(*durableResolver[T])
 
-	// provide the resolver to the flow
-	return b.WithContextWrapper(func(ctx context.Context) context.Context {
-		// Optionally register cleanup to run at execution end.
-		ctx = ftype.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
-			if d.cleanup == nil {
-				return nil
-			}
+	// Optionally register cleanup to run at execution end.
+	ctx = ftype.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
+		if d.cleanup == nil {
+			return nil
+		}
 
-			resolver.durableMu.Lock()
-			v := resolver.cachedValue
-			resolver.durableMu.Unlock()
-			if v == nil {
-				return nil
-			}
-			return d.cleanup(v)
-		})(ctx)
-		return context.WithValue(ctx, d.key, resolver)
-	})
+		resolver.durableMu.Lock()
+		v := resolver.cachedValue
+		resolver.durableMu.Unlock()
+		if v == nil {
+			return nil
+		}
+		return d.cleanup(v)
+	})(ctx)
+	return context.WithValue(ctx, d.key, resolver)
 }
 
 var (
