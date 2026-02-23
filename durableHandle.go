@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
+	"github.com/futura-platform/futura/internal/flowhooks"
 )
 
 type DurableHandle[T any] struct {
@@ -123,7 +123,7 @@ func (d *DurableHandle[T]) Provide(b FlowBuilder) FlowBuilder {
 // Once a value pointer is resolved either via loading from the execution container or via the constructor,
 // it is cached and will be returned by subsequent calls to the resolver.
 // If this cached pointer is non nil by the time execution ends, it will be passed into a cleanup function call.
-// As opposed to Provide, this function should be used when a FlowBuilder is not available, like in a stateful ftype.FlowLoopOption. (ftype/withMaxFailures.go uses this)
+// As opposed to Provide, this function should be used when a FlowBuilder is not available, like in a stateful ftype.FlowLoopOption. (fopt/with_max_failures.go uses this)
 func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 	// first check if the context already has a value for this key
 	if ctx.Value(d.key) != nil {
@@ -145,7 +145,7 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 	resolver := anyResolver.(*durableResolver[T])
 
 	// Optionally register cleanup to run at execution end.
-	ctx = fopt.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
+	ctx = flowhooks.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
 		if d.cleanup == nil {
 			return nil
 		}

@@ -84,7 +84,7 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 			return fn(b, args)
 		},
 		args,
-		append(opts, durable.WithHandlesCache())...,
+		append([]ftype.FlowLoopOption{durable.WithHandlesCache()}, opts...)...,
 	)
 
 	return result, err

@@ -1,4 +1,4 @@
-package fopt_test
+package flowhooks_test
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/futura-platform/futura"
-	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/internal/flowhooks"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -23,7 +23,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 				return "success", nil
 			},
 			nil,
-			fopt.WithOnExecutionEnd(func(ctx context.Context, err error) error {
+			flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error {
 				callCount++
 				gotErr = err
 				return nil
@@ -45,7 +45,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 				return "cancelled", ftype.ErrCancelFlow
 			},
 			nil,
-			fopt.WithOnExecutionEnd(func(ctx context.Context, err error) error {
+			flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error {
 				callCount++
 				gotErr = err
 				return nil
@@ -59,7 +59,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 
 	t.Run("WithOnExecutionEnd's error should be joined with the flow error", func(t *testing.T) {
 		onEndError := errors.New("onEnd error")
-		instrumentForTestOpt := fopt.WithOnExecutionEnd(func(ctx context.Context, err error) error {
+		instrumentForTestOpt := flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error {
 			return onEndError
 		})
 		t.Run("when the flow error is nil", func(t *testing.T) {
@@ -107,8 +107,8 @@ func TestWithOnExecutionEnd(t *testing.T) {
 				return "success", nil
 			},
 			nil,
-			fopt.WithOnExecutionEnd(onEnd1),
-			fopt.WithOnExecutionEnd(onEnd2),
+			flowhooks.WithOnExecutionEnd(onEnd1),
+			flowhooks.WithOnExecutionEnd(onEnd2),
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, []string{"onEnd2", "onEnd1"}, callOrder)
