@@ -79,7 +79,15 @@ func (e *Encoder[T]) encodeInterface(v reflect.Value, path string) error {
 		return nil
 	}
 
-	concreteValue := privateencodinginternal.UnsafeValue(v.Elem())
+	concreteValue := v.Elem()
+	// Concrete values extracted from interfaces can be non-addressable.
+	// Clone to an addressable value before attempting unsafe access.
+	if !concreteValue.CanAddr() {
+		addressableConcreteValue := reflect.New(concreteValue.Type()).Elem()
+		addressableConcreteValue.Set(concreteValue)
+		concreteValue = addressableConcreteValue
+	}
+	concreteValue = privateencodinginternal.UnsafeValue(concreteValue)
 	typeName, ok := lookupRegisteredTypeName(concreteValue.Type())
 	if !ok {
 		return encodePathError(path+".(type)", fmt.Errorf(
