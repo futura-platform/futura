@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
@@ -179,7 +180,7 @@ func TestLoopFlow(t *testing.T) {
 				return "", err
 			}
 			return r1 + r2, nil
-		}, nil, ftype.WithOnStepError(func(err error) (continueExecution bool) {
+		}, nil, fopt.WithOnStepError(func(err error) (continueExecution bool) {
 			assert.ErrorIs(t, err, expectedErr)
 			errCount++
 			return true

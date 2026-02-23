@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
@@ -467,7 +468,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		usedPtr = ref
 		*ref = 7
 
-		err := ftype.RunOnExecutionEnd(b, nil)
+		err := fopt.RunOnExecutionEnd(b, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, cleanupCalls)
 		assert.Same(t, usedPtr, cleanedPtr)
@@ -495,7 +496,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 
 		exec := execution.NewFlowExecution()
 		b := newDurableTestBuilder(t, exec, h.Provide)
-		err := ftype.RunOnExecutionEnd(b, nil)
+		err := fopt.RunOnExecutionEnd(b, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, cleanupCalls)
 	})
@@ -523,7 +524,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		b := newDurableTestBuilder(t, exec, h.Provide)
 		_, _ = h.Use(b)
 
-		err := ftype.RunOnExecutionEnd(b, ftype.ErrCancelFlow)
+		err := fopt.RunOnExecutionEnd(b, ftype.ErrCancelFlow)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, cleanupCalls)
 	})

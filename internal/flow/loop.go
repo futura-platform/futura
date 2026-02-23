@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
@@ -29,7 +30,7 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 
 	defer func() {
 		// Run execution-end callbacks.
-		if hookErr := ftype.RunOnExecutionEnd(ctx, err); hookErr != nil {
+		if hookErr := fopt.RunOnExecutionEnd(ctx, err); hookErr != nil {
 			err = errors.Join(err, fmt.Errorf("execution end hooks: %w", hookErr))
 		}
 	}()

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
 )
@@ -145,7 +145,7 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 	resolver := anyResolver.(*durableResolver[T])
 
 	// Optionally register cleanup to run at execution end.
-	ctx = ftype.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
+	ctx = fopt.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
 		if d.cleanup == nil {
 			return nil
 		}

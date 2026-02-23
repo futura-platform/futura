@@ -1,39 +1,11 @@
-package ftype
+package fopt
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"log/slog"
-	"runtime"
 
-	"github.com/futura-platform/futura/flog"
-	stepwrapper "github.com/futura-platform/futura/internal/step/wrapper"
+	"github.com/futura-platform/futura/ftype"
 )
-
-type FlowLoopOption func(context.Context) context.Context
-
-func WithLogger(logger *slog.Logger) FlowLoopOption {
-	return func(ctx context.Context) context.Context {
-		return flog.WithLogger(ctx, logger)
-	}
-}
-
-func WithStepWrapper(wrapper stepwrapper.StepWrapper) FlowLoopOption {
-	return func(ctx context.Context) context.Context {
-		return stepwrapper.With(ctx, wrapper)
-	}
-}
-
-func WithOnStepError(onError func(err error) (continueExecution bool)) FlowLoopOption {
-	return WithStepWrapper(func(ctx context.Context, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
-		_, err := call()
-		if err != nil && !onError(err) {
-			return fmt.Errorf("%w: %w", ErrCancelFlow, err)
-		}
-		return nil
-	})
-}
 
 // WithOnExecutionEnd registers a callback that will be invoked once when a top-level
 // flow execution ends (success or error).
@@ -43,7 +15,7 @@ func WithOnStepError(onError func(err error) (continueExecution bool)) FlowLoopO
 //
 // The callback's returned error (if any) will be joined onto the final flow error
 // by the top-level flow runner.
-func WithOnExecutionEnd(onEnd func(ctx context.Context, err error) error) FlowLoopOption {
+func WithOnExecutionEnd(onEnd func(ctx context.Context, err error) error) ftype.FlowLoopOption {
 	return func(ctx context.Context) context.Context {
 		if onEnd == nil {
 			panic("WithOnExecutionEnd callback cannot be nil")

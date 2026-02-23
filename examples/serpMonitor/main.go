@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/futura-platform/futura"
-	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/fopt"
 )
 
 func (s serpRankings) String() string {
@@ -54,12 +54,12 @@ func runSerpMonitor(ctx context.Context, term string) error {
 	_, err = futura.NewFlow[string, []serpEntry]().Execute(ctx,
 		serpMonitorFlow,
 		term,
-		ftype.WithOnStepError(func(err error) bool {
+		fopt.WithOnStepError(func(err error) bool {
 			fmt.Println("error:", err)
 			time.Sleep(time.Second)
 			return true
 		}),
-		ftype.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		fopt.WithLogger(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		}))),
 	)
