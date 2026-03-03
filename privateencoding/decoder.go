@@ -131,18 +131,24 @@ func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 		return nil
 	}
 	if getUnmarshaler, ok := implementsBinaryUnmarshaler(uv); ok {
-		var size int
-		if err := d.mustDecodeSimple(&size); err != nil {
-			return decodePathError(path, err)
+		decodeBinary := func() error {
+			var size int
+			if err := d.mustDecodeSimple(&size); err != nil {
+				return decodePathError(path, err)
+			}
+			data := make([]byte, size)
+			if _, err := io.ReadFull(d.r, data); err != nil {
+				return decodePathError(path, err)
+			}
+			if err := getUnmarshaler().UnmarshalBinary(data); err != nil {
+				return decodePathError(path, err)
+			}
+			return nil
 		}
-		data := make([]byte, size)
-		if _, err := io.ReadFull(d.r, data); err != nil {
-			return decodePathError(path, err)
+		if uv.Kind() == reflect.Pointer {
+			return d.decodeNillable(uv, path, decodeBinary)
 		}
-		if err := getUnmarshaler().UnmarshalBinary(data); err != nil {
-			return decodePathError(path, err)
-		}
-		return nil
+		return decodeBinary()
 	}
 	if uv.Kind() == reflect.Interface {
 		return d.decodeInterface(uv, path)

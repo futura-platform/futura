@@ -118,6 +118,20 @@ func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 	}
 
 	if getMarshaler, ok := implementsBinaryMarshaler(uv); ok {
+		if uv.Kind() == reflect.Pointer {
+			return e.encodeNillable(uv, path, func(v reflect.Value) error {
+				data, err := getMarshaler().MarshalBinary()
+				if err != nil {
+					return encodePathError(path, err)
+				}
+				if err := e.mustEncodeSimple(len(data)); err != nil {
+					return encodePathError(path+".len", err)
+				} else if _, err := e.w.Write(data); err != nil {
+					return encodePathError(path+".data", err)
+				}
+				return nil
+			})
+		}
 		data, err := getMarshaler().MarshalBinary()
 		if err != nil {
 			return encodePathError(path, err)

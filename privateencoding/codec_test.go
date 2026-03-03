@@ -292,6 +292,16 @@ func TestCodecURLPointer(t *testing.T) {
 	})
 }
 
+func TestCodecNilURLPointer(t *testing.T) {
+	var value *url.URL
+
+	assert.NotPanics(t, func() {
+		decoded, err := applyCodec(value)
+		assert.NoError(t, err)
+		assert.Nil(t, decoded)
+	})
+}
+
 func TestCodecURLPointerInMomentOutput(t *testing.T) {
 	privateencoding.Register[*url.URL]()
 	value := *moment.NewMoment(moment.NewFn(func(ctx context.Context, args int) (int, error) {
