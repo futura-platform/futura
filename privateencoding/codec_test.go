@@ -2,11 +2,13 @@ package privateencoding_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,6 +272,48 @@ func TestCodec(t *testing.T) {
 	t.Run("moment_identity", func(t *testing.T) {
 		id := moment.NewIdentity(t.Context(), moment.Callpath{{File: "test.go", Line: 1}})
 		applyCodecThenCompare(t, id, nil)
+	})
+}
+
+func TestCodecURLPointer(t *testing.T) {
+	value := &url.URL{
+		Scheme:   "https",
+		Host:     "example.com",
+		Path:     "/search",
+		RawQuery: "q=futura",
+	}
+
+	assert.NotPanics(t, func() {
+		decoded, err := applyCodec(value)
+		assert.NoError(t, err)
+		if assert.NotNil(t, decoded) {
+			assert.Equal(t, value.String(), decoded.String())
+		}
+	})
+}
+
+func TestCodecURLPointerInMomentOutput(t *testing.T) {
+	privateencoding.Register[*url.URL]()
+	value := *moment.NewMoment(moment.NewFn(func(ctx context.Context, args int) (int, error) {
+		return args, nil
+	}), 1)
+	value.SetOutput(&url.URL{
+		Scheme:   "https",
+		Host:     "example.com",
+		Path:     "/search",
+		RawQuery: "q=" + strings.Repeat("f", 300),
+	})
+
+	assert.NotPanics(t, func() {
+		decoded, err := applyCodec(value)
+		assert.NoError(t, err)
+		if assert.IsType(t, &url.URL{}, decoded.Output()) {
+			assert.Equal(
+				t,
+				value.Output().(*url.URL).String(),
+				decoded.Output().(*url.URL).String(),
+			)
+		}
 	})
 }
 
