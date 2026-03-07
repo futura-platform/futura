@@ -31,7 +31,7 @@ func TestCall(t *testing.T) {
 		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
 			return "result", expectedError
 		})
-		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			return nil
 		})
 		testutil.PanicsWithErrorIs(t, ErrDidNotCall, func() {
@@ -46,7 +46,7 @@ func TestCall(t *testing.T) {
 			callCount++
 			return "result", expectedError
 		})
-		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			call()
 			call()
 			return nil
@@ -64,16 +64,19 @@ func TestCall(t *testing.T) {
 			return "result", expectedError
 		})
 		wrapperCallCount := 0
+		var wrapperReceivedLabel string
 		var wrapperReceivedOutput any
 		var wrapperReceivedError error
-		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			wrapperCallCount++
+			wrapperReceivedLabel = fnLabel
 			wrapperReceivedOutput, wrapperReceivedError = call()
 			return nil
 		})
 		output, err := call(ctx, fn, struct{}{}, nil)
 		assert.Equal(t, 1, callCount)
 		assert.Equal(t, 1, wrapperCallCount)
+		assert.Equal(t, fn.Label(), wrapperReceivedLabel)
 		assert.Equal(t, "result", output)
 		assert.Equal(t, "result", wrapperReceivedOutput)
 		assert.ErrorIs(t, err, expectedError)
@@ -85,7 +88,7 @@ func TestCall(t *testing.T) {
 		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
 			return "result", errors.New("unexpected error")
 		})
-		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			call()
 			return expectedError
 		})

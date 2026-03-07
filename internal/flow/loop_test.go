@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/futura-platform/futura/fopt"
@@ -180,8 +181,10 @@ func TestLoopFlow(t *testing.T) {
 				return "", err
 			}
 			return r1 + r2, nil
-		}, nil, fopt.WithOnStepError(func(err error) (continueExecution bool) {
+		}, nil, fopt.WithOnStepError(func(ctx context.Context, fnLabel string, callstack []runtime.Frame, err error) (continueExecution bool) {
 			assert.ErrorIs(t, err, expectedErr)
+			assert.Equal(t, "failsTwice", fnLabel)
+			assert.NotEmpty(t, callstack)
 			errCount++
 			return true
 		}))

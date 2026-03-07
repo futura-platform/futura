@@ -14,6 +14,7 @@ const (
 
 type StepWrapper func(
 	ctx context.Context,
+	fnLabel string,
 	args any,
 	callstack []runtime.Frame,
 	call func() (output any, err error),
@@ -23,10 +24,10 @@ func With(ctx context.Context, stepWrapper StepWrapper) context.Context {
 	withParentWrapper := stepWrapper
 	if parentWrapper, ok := FromContext(ctx); ok {
 		// wrap the wrapper that has just been passed in with the parent (if it exists)
-		withParentWrapper = func(ctx context.Context, args any, callstack []runtime.Frame, call func() (any, error)) error {
+		withParentWrapper = func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) error {
 			var childErr error
-			parentErr := parentWrapper(ctx, args, callstack, func() (pendingOutput any, pendingErr error) {
-				childErr = stepWrapper(ctx, args, callstack, func() (any, error) {
+			parentErr := parentWrapper(ctx, fnLabel, args, callstack, func() (pendingOutput any, pendingErr error) {
+				childErr = stepWrapper(ctx, fnLabel, args, callstack, func() (any, error) {
 					pendingOutput, pendingErr = call()
 					return pendingOutput, pendingErr
 				})

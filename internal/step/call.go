@@ -28,7 +28,7 @@ func call[A comparable, R comparable](ctx context.Context, fn moment.Fn[A, R], a
 	if !ok {
 		callFn()
 	} else {
-		errOverride := stepWrapper(ctx, args, callstack, callFn)
+		errOverride := stepWrapper(ctx, fn.Label(), args, callstack, callFn)
 		if callCount == 0 {
 			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrDidNotCall))
 		} else if callCount > 1 {

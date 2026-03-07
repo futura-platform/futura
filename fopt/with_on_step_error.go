@@ -8,10 +8,10 @@ import (
 	"github.com/futura-platform/futura/ftype"
 )
 
-func WithOnStepError(onError func(ctx context.Context, err error) (continueExecution bool)) ftype.FlowLoopOption {
-	return WithStepWrapper(func(ctx context.Context, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+func WithOnStepError(onError func(ctx context.Context, fnLabel string, callstack []runtime.Frame, err error) (continueExecution bool)) ftype.FlowLoopOption {
+	return WithStepWrapper(func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 		_, err := call()
-		if err != nil && !onError(ctx, err) {
+		if err != nil && !onError(ctx, fnLabel, callstack, err) {
 			return fmt.Errorf("%w: %w", ftype.ErrCancelFlow, err)
 		}
 		return nil

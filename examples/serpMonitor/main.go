@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -54,7 +55,7 @@ func runSerpMonitor(ctx context.Context, term string) error {
 	_, err = futura.NewFlow[string, []serpEntry]().Execute(ctx,
 		serpMonitorFlow,
 		term,
-		fopt.WithOnStepError(func(err error) bool {
+		fopt.WithOnStepError(func(_ context.Context, _ string, _ []runtime.Frame, err error) bool {
 			fmt.Println("error:", err)
 			time.Sleep(time.Second)
 			return true

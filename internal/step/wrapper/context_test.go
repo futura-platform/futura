@@ -12,7 +12,7 @@ import (
 
 func TestWithStepWrapper(t *testing.T) {
 	t.Run("attaches the wrapper directly to the context if there is no parent wrapper", func(t *testing.T) {
-		wrapper := func(ctx context.Context, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		wrapper := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			return nil
 		}
 		ctx := With(t.Context(), wrapper)
@@ -25,13 +25,15 @@ func TestWithStepWrapper(t *testing.T) {
 	t.Run("attaches the parented wrapper to the context if there is a parent wrapper. The parent is called before the child.", func(t *testing.T) {
 		runParentChildTest := func(parentErr error, childErr error) error {
 			callOrder := []string{}
-			parentWrapper := func(ctx context.Context, args any, callstack []runtime.Frame, call func() (any, error)) error {
+			parentWrapper := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) error {
+				assert.Equal(t, "test-step", fnLabel)
 				callOrder = append(callOrder, "parent")
 				call()
 				return parentErr
 			}
 			ctx := With(t.Context(), parentWrapper)
-			childWrapper := func(ctx context.Context, args any, callstack []runtime.Frame, call func() (any, error)) error {
+			childWrapper := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) error {
+				assert.Equal(t, "test-step", fnLabel)
 				callOrder = append(callOrder, "child")
 				call()
 				return childErr
@@ -40,7 +42,7 @@ func TestWithStepWrapper(t *testing.T) {
 			evalledStepWrapper, ok := FromContext(ctx)
 			assert.True(t, ok)
 
-			err := evalledStepWrapper(ctx, nil, nil, func() (any, error) {
+			err := evalledStepWrapper(ctx, "test-step", nil, nil, func() (any, error) {
 				callOrder = append(callOrder, "fn")
 				return nil, nil
 			})
