@@ -61,7 +61,7 @@ type durableResolver[T any] struct {
 	durableMu sync.Mutex
 
 	valueLoader  sync.Once
-	valueLoadErr error
+	valueLoadErr any
 	cached       fastComparableValue[T]
 }
 
@@ -87,7 +87,7 @@ func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *
 		defer func() {
 			if rr := recover(); rr != nil {
 				slog.Error("failed to load durable value", "error", rr)
-				r.valueLoadErr = fmt.Errorf("failed to load durable value: %v", rr)
+				r.valueLoadErr = rr
 			}
 		}()
 
