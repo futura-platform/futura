@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -59,52 +60,62 @@ type durableResolver[T any] struct {
 	// Use() calls (and multiple persist funcs).
 	durableMu sync.Mutex
 
-	cachedValue       *T
-	cachedValueWasSet bool
-	cachedChecksum    uint64
-	cachedHasRemote   bool
+	valueLoader  sync.Once
+	valueLoadErr error
+	cached       fastComparableValue[T]
+}
+
+type syncLevel int
+
+const (
+	syncLevelNone syncLevel = iota
+	syncLevelLocal
+	syncLevelRemote
+)
+
+type fastComparableValue[T any] struct {
+	value    *T
+	checksum uint64
+	sync     syncLevel
 }
 
 func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *T {
 	r.durableMu.Lock()
-	if r.cachedValueWasSet {
-		v := r.cachedValue
-		r.durableMu.Unlock()
-		return v
-	}
-	r.durableMu.Unlock()
-
-	exec := execution.MustFromContext(ctx)
-	serialized, ok := exec.LoadDurable(ctx, string(d.key))
-
-	var (
-		value     *T
-		checksum  uint64
-		hasRemote bool
-	)
-	if !ok {
-		value = d.constructor()
-		checksum = 0
-		hasRemote = false
-	} else {
-		currentValue, err := d.unmarshal(serialized)
-		if err != nil {
-			panic(err)
-		}
-		value = currentValue
-		checksum = xxhash.Sum64(serialized)
-		hasRemote = true
-	}
-
-	r.durableMu.Lock()
 	defer r.durableMu.Unlock()
-	if !r.cachedValueWasSet {
-		r.cachedValue = value
-		r.cachedChecksum = checksum
-		r.cachedHasRemote = hasRemote
-		r.cachedValueWasSet = true
+
+	r.valueLoader.Do(func() {
+		defer func() {
+			if rr := recover(); rr != nil {
+				slog.Error("failed to load durable value", "error", rr)
+				r.valueLoadErr = fmt.Errorf("failed to load durable value: %v", rr)
+			}
+		}()
+
+		exec := execution.MustFromContext(ctx)
+		serialized, ok := exec.LoadDurable(ctx, string(d.key))
+
+		var v fastComparableValue[T]
+		if !ok {
+			v.value = d.constructor()
+			v.checksum = 0
+			v.sync = syncLevelLocal
+		} else {
+			value, err := d.unmarshal(serialized)
+			if err != nil {
+				panic(err)
+			}
+			v.value = value
+			v.checksum = xxhash.Sum64(serialized)
+			v.sync = syncLevelRemote
+		}
+
+		r.cached = v
+	})
+	if r.valueLoadErr != nil {
+		panic(r.valueLoadErr)
 	}
-	return r.cachedValue
+
+	return r.cached.value
 }
 
 func (d *DurableHandle[T]) Key() string {
@@ -163,7 +174,7 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 		}
 
 		resolver.durableMu.Lock()
-		v := resolver.cachedValue
+		v := resolver.cached.value
 		resolver.durableMu.Unlock()
 		if v == nil {
 			return nil
@@ -206,13 +217,13 @@ func (d *DurableHandle[T]) Use(ctx context.Context) (ref *T, persist func() (did
 
 		r.durableMu.Lock()
 		defer r.durableMu.Unlock()
-		didChange := !r.cachedHasRemote || localChecksum != r.cachedChecksum
+		didChange := r.cached.sync != syncLevelRemote || localChecksum != r.cached.checksum
 		if didChange {
 			exec := execution.MustFromContext(ctx)
 			exec.StoreDurable(ctx, string(d.key), serialized)
 			// update remote state so repeated persist calls are idempotent.
-			r.cachedChecksum = localChecksum
-			r.cachedHasRemote = true
+			r.cached.checksum = localChecksum
+			r.cached.sync = syncLevelRemote
 		}
 		return didChange
 	}
