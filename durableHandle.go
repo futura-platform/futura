@@ -107,8 +107,8 @@ func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *
 	return r.cachedValue
 }
 
-func (r *DurableHandle[T]) Key() durable.HandleKey {
-	return r.key
+func (r *DurableHandle[T]) Key() string {
+	return string(r.key)
 }
 
 var (
