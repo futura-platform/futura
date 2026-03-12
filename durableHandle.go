@@ -107,6 +107,10 @@ func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *
 	return r.cachedValue
 }
 
+func (r *DurableHandle[T]) Key() durable.HandleKey {
+	return r.key
+}
+
 var (
 	ErrDurableResolverAlreadyProvided = errors.New("durable resolver already provided")
 	ErrDurableHandlesNotFound         = errors.New("durable handles not found")
