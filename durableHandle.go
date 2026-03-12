@@ -107,8 +107,16 @@ func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *
 	return r.cachedValue
 }
 
-func (r *DurableHandle[T]) Key() string {
-	return string(r.key)
+func (d *DurableHandle[T]) Key() string {
+	return string(d.key)
+}
+
+func (d *DurableHandle[T]) Marshal(v *T) ([]byte, error) {
+	return d.marshal(v)
+}
+
+func (d *DurableHandle[T]) Unmarshal(data []byte) (*T, error) {
+	return d.unmarshal(data)
 }
 
 var (
