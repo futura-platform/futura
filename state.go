@@ -126,7 +126,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 func State[T comparable](b FlowBuilder, initialValue ...T) StateContainer[T] {
 	switch len(initialValue) {
 	case 0:
-		t := reflect.TypeOf((*T)(nil)).Elem()
+		t := reflect.TypeFor[T]()
 		return stateWithInitialValue(b, reflect.Zero(t).Interface().(T))
 	case 1:
 		return stateWithInitialValue(b, initialValue[0])
