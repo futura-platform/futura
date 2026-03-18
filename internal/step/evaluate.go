@@ -23,7 +23,7 @@ var (
 	ErrUnexpectedBranchTaken        = errors.New("unexpected branch taken, new branches should only be triggered by a futura state change")
 )
 
-func Evaluate[A comparable, R comparable](
+func Evaluate[A comparable, R any](
 	ctx context.Context,
 	fn moment.Fn[A, R],
 	args A,
@@ -47,7 +47,7 @@ func Evaluate[A comparable, R comparable](
 
 var ErrEvalFailed = errors.New("eval failed")
 
-func evaluateWithCallstack[A comparable, R comparable](
+func evaluateWithCallstack[A comparable, R any](
 	ctx context.Context,
 	fn moment.Fn[A, R],
 	args A,

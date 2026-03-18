@@ -16,7 +16,7 @@ var (
 	ErrCalledMultipleTimes        = errors.New("called multiple times")
 )
 
-func call[A comparable, R comparable](ctx context.Context, fn moment.Fn[A, R], args A, callstack []runtime.Frame) (output R, err error) {
+func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], args A, callstack []runtime.Frame) (output R, err error) {
 	callCount := 0
 	callFn := func() (any, error) {
 		callCount++
