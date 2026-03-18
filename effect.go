@@ -32,10 +32,10 @@ func Effect[A comparable](b FlowBuilder, fn EffectFn[A], args A, options ...ftyp
 }
 
 // SourceFn is a function that has no inputs and returns a comparable output.
-type SourceFn[R comparable] func(ctx context.Context) (R, error)
+type SourceFn[R any] func(ctx context.Context) (R, error)
 
 // Source is a helper function for steps that don't take any arguments.
-func Source[R comparable](b FlowBuilder, fn SourceFn[R], options ...ftype.MomentFnOption) (output R, err error) {
+func Source[R any](b FlowBuilder, fn SourceFn[R], options ...ftype.MomentFnOption) (output R, err error) {
 	opts := withCompileTimeLabelOption(fn, options...)
 	return Step(b, func(ctx context.Context, _ struct{}) (R, error) {
 		return fn(ctx)
