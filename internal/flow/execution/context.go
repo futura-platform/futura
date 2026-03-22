@@ -160,12 +160,6 @@ func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity)
 	return moment, ok
 }
 
-func (f *FlowExecution) InvalidateMoment(ctx context.Context, identity moment.Identity) {
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		tx.DeleteMoment(identity)
-	})
-}
-
 // RecordCurrentMoment stores the current identity+moment (growing the sequence slice if necessary)
 // it also marks the identity as seen.
 func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment moment.Moment) {

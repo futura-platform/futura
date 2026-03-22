@@ -281,20 +281,6 @@ func TestDurable(t *testing.T) {
 	})
 }
 
-func TestInvalidateMoment(t *testing.T) {
-	t.Run("normal case", func(t *testing.T) {
-		ctx := t.Context()
-		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
-		f := MustFromContext(ctx)
-
-		key := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
-		c.SetMoment(key, moment.Moment{})
-		f.InvalidateMoment(ctx, key)
-		assert.False(t, c.HasMoment(key))
-	})
-}
-
 func TestMustFromContext(t *testing.T) {
 	ctx := t.Context()
 	ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)

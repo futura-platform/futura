@@ -16,7 +16,7 @@ type ComparableMomentFn[A comparable, R any] func(ctx context.Context, args A) (
 // Step is a function that executes a step in the flow.
 // It memoizes the result of the step and returns it if the step is called again at the same "moment" in the flow.
 func Step[A comparable, R any](b FlowBuilder, fn ComparableMomentFn[A, R], args A, options ...ftype.MomentFnOption) (output R, err error) {
-	output, _, err = step.Evaluate(
+	output, err = step.Evaluate(
 		b,
 		moment.NewFn(
 			moment.Callable[A, R](fn),

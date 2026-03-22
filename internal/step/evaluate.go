@@ -28,7 +28,7 @@ func Evaluate[A comparable, R any](
 	ctx context.Context,
 	fn moment.Fn[A, R],
 	args A,
-) (output R, invalidate func(ctx context.Context), err error) {
+) (output R, err error) {
 	if err = testutil.InjectedError(ctx, testutil.InjectedErrorLevelEvaluate); err != nil {
 		return
 	}
@@ -53,7 +53,7 @@ func evaluateWithCallstack[A comparable, R any](
 	fn moment.Fn[A, R],
 	args A,
 	callstack []runtime.Frame,
-) (output R, invalidate func(ctx context.Context), err error) {
+) (output R, err error) {
 	if ctx.Err() != nil {
 		err = ctx.Err()
 		return
@@ -139,13 +139,10 @@ func evaluateWithCallstack[A comparable, R any](
 		cacheStatus = "HIT"
 	}
 
-	// setup invalidation function
-	invalidate = func(ctx context.Context) { f.InvalidateMoment(ctx, identity) }
-
 	// return the memoized result
 	anyOutput := currentMoment.Output()
 	if anyOutput == nil {
 		return
 	}
-	return anyOutput.(R), invalidate, nil
+	return anyOutput.(R), nil
 }

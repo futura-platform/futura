@@ -37,7 +37,7 @@ func TestLoopFlow(t *testing.T) {
 	t.Run("Flow cancellation", func(t *testing.T) {
 		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
 		r, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
-			_, _, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+			_, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
 				return "", ftype.ErrCancelFlow
 			}), struct{}{})
 			if err != nil {
@@ -135,12 +135,12 @@ func TestLoopFlow(t *testing.T) {
 			replays++
 			r1 := "didnteval"
 			if replays != 2 {
-				r1, _, err = step.Evaluate(ctx, fn1, struct{}{})
+				r1, err = step.Evaluate(ctx, fn1, struct{}{})
 				if err != nil {
 					return "", err
 				}
 			}
-			r2, _, err := step.Evaluate(ctx, fn2, struct{}{})
+			r2, err := step.Evaluate(ctx, fn2, struct{}{})
 			if err != nil {
 				return "", err
 			}
@@ -171,12 +171,12 @@ func TestLoopFlow(t *testing.T) {
 
 		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *any) (string, error) {
 			// todo: make this include a conditional branch to cover moment eviction.
-			r1, _, err := step.Evaluate(ctx, failsTwice, nil)
+			r1, err := step.Evaluate(ctx, failsTwice, nil)
 			if err != nil {
 				return "", err
 			}
 
-			r2, _, err := step.Evaluate(ctx, fn2, nil)
+			r2, err := step.Evaluate(ctx, fn2, nil)
 			if err != nil {
 				return "", err
 			}
