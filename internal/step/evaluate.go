@@ -134,7 +134,7 @@ func evaluateWithCallstack[A comparable, R any](
 		if err != nil {
 			return
 		}
-		currentMoment.SetOutput(output)
+		currentMoment.SetValidOutput(output)
 	} else {
 		cacheStatus = "HIT"
 	}

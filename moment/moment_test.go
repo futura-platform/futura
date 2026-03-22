@@ -38,6 +38,11 @@ func TestValidate(t *testing.T) {
 
 			moment1.Invalidate()
 			assert.False(t, moment1.Validate(0, fn, 1, moment.Identity{}))
+
+			t.Run("setting the output to a different value makes it valid again", func(t *testing.T) {
+				moment1.SetValidOutput(2)
+				assert.True(t, moment1.Validate(0, fn, 1, moment.Identity{}))
+			})
 		})
 	})
 	t.Run("fatal divergence case", func(t *testing.T) {
@@ -66,7 +71,7 @@ func TestOutput(t *testing.T) {
 	})
 	moment1 := moment.NewMoment(fn, 1)
 	output := rand.Int()
-	moment1.SetOutput(output)
+	moment1.SetValidOutput(output)
 	assert.Equal(t, output, moment1.Output())
 }
 

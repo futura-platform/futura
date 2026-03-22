@@ -46,7 +46,7 @@ func TestCodec_InterfaceEncoding_WithNonAddressableConcreteValues(t *testing.T) 
 		privateencoding.Register[seal.Sealed[[]sealedResult]]()
 
 		m := moment.Moment{}
-		m.SetOutput(seal.Seal([]sealedResult{
+		m.SetValidOutput(seal.Seal([]sealedResult{
 			{ID: 1},
 			{ID: 2},
 		}))
@@ -68,7 +68,7 @@ func TestCodec_InterfaceEncoding_WithNonAddressableConcreteValues(t *testing.T) 
 		privateencoding.Register[seal.Sealed[[]sealedResult]]()
 
 		m := moment.Moment{}
-		m.SetOutput(seal.Seal([]sealedResult{
+		m.SetValidOutput(seal.Seal([]sealedResult{
 			{ID: 9},
 			{ID: 10},
 		}))

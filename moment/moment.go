@@ -48,8 +48,9 @@ func (m Moment) Output() any {
 	return m.output
 }
 
-func (m *Moment) SetOutput(output any) {
+func (m *Moment) SetValidOutput(output any) {
 	m.output = output
+	m.invalidated = false
 }
 
 func (m *Moment) Invalidate() {

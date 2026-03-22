@@ -307,7 +307,7 @@ func TestCodecURLPointerInMomentOutput(t *testing.T) {
 	value := *moment.NewMoment(moment.NewFn(func(ctx context.Context, args int) (int, error) {
 		return args, nil
 	}), 1)
-	value.SetOutput(&url.URL{
+	value.SetValidOutput(&url.URL{
 		Scheme:   "https",
 		Host:     "example.com",
 		Path:     "/search",
