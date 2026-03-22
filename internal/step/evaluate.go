@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"runtime"
 
 	"github.com/futura-platform/futura/flog"
@@ -97,8 +98,15 @@ func evaluateWithCallstack[A comparable, R any](
 	}
 
 	// register input and output types so moments can be properly serialized/deserialized
-	privateencoding.Register[A]()
-	privateencoding.Register[R]()
+	// (ignore for interfaces, we expect them to be registered by the caller)
+	inputRt := reflect.TypeFor[A]()
+	if inputRt.Kind() != reflect.Interface {
+		privateencoding.RegisterType(inputRt)
+	}
+	outputRt := reflect.TypeFor[R]()
+	if outputRt.Kind() != reflect.Interface {
+		privateencoding.RegisterType(outputRt)
+	}
 
 	// then get the moment from the cache
 	currentMomentValue, ok := f.GetMoment(ctx, identity)

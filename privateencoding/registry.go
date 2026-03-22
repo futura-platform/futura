@@ -18,14 +18,17 @@ var (
 // Register records a type name mapping used for interface serialization.
 // Types serialized behind interface fields must be registered before decode.
 func Register[T any]() {
-	rt := reflect.TypeFor[T]()
+	RegisterType(reflect.TypeFor[T]())
+}
+
+func RegisterType(rt reflect.Type) {
 	if rt.Kind() == reflect.Interface {
 		panic("interface types cannot be registered")
 	}
-	registerType(rt, typeRegistrationName(rt))
+	registerNamedType(rt, typeRegistrationName(rt))
 }
 
-func registerType(rt reflect.Type, name string) {
+func registerNamedType(rt reflect.Type, name string) {
 	registerMu.Lock()
 	defer registerMu.Unlock()
 
