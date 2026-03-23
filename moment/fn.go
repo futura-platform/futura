@@ -28,9 +28,9 @@ type Fn[A any, R any] struct {
 	metadata ftype.MomentFnMetadata
 }
 
-func NewFn[A comparable, R any](callable Callable[A, R], option ...ftype.MomentFnOption) Fn[A, R] {
-	c := Fn[A, R]{callable: callable, options: option}
-	for _, opt := range append([]ftype.MomentFnOption{ftype.WithLabel(CompileTimeLabel(c.runtimeFunc()))}, option...) {
+func NewFn[A comparable, R any](callable Callable[A, R], options ...ftype.MomentFnOption) Fn[A, R] {
+	c := Fn[A, R]{callable: callable, options: options}
+	for _, opt := range append([]ftype.MomentFnOption{ftype.WithLabel(CompileTimeLabel(c.runtimeFunc()))}, options...) {
 		opt(&c.metadata)
 	}
 	return c

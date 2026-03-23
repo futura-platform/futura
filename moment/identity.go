@@ -12,7 +12,7 @@ import (
 // The callpath identifies where in the code the moment is defined, and the key identifies the "instance" of the moment.
 //
 // This is useful for moments produced by loops. This is a similar concept to React's "key" prop.
-// "key"s must be comparable, this is enforced in the WithMomentIdentityKey function.
+// "key"s must be comparable, this is enforced in the WithIdentityKey function.
 //
 // "key" is assigned through context, so that api consumers can have the ability to encapsulate logic that doesn't need to know about the key.
 // (like a helper function that could be called inside or out of a loop)
@@ -53,7 +53,7 @@ func WithIdentityKey[T comparable](ctx context.Context, key T) context.Context {
 	var genericKey any = key
 	if parent != nil {
 		genericKey = compositeIdentityKey{
-			parent: IdentityFromContext(ctx),
+			parent: parent,
 			this:   key,
 		}
 	}
