@@ -144,8 +144,5 @@ func evaluateWithCallstack[A comparable, R any](
 	if !ok {
 		panic(ftrerrors.InconsistentStateError(fmt.Errorf("expected moment to have a valid output, but it was not")))
 	}
-	if anyOutput == nil {
-		return
-	}
 	return anyOutput.(R), nil
 }
