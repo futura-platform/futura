@@ -12,7 +12,7 @@ import (
 // The callpath identifies where in the code the moment is defined, and the key identifies the "instance" of the moment.
 //
 // This is useful for moments produced by loops. This is a similar concept to React's "key" prop.
-// "key"s much be comparable, this is enforced in the WithMomentIdentityKey function.
+// "key"s must be comparable, this is enforced in the WithMomentIdentityKey function.
 //
 // "key" is assigned through context, so that api consumers can have the ability to encapsulate logic that doesn't need to know about the key.
 // (like a helper function that could be called inside or out of a loop)
