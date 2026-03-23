@@ -140,7 +140,10 @@ func evaluateWithCallstack[A comparable, R any](
 	}
 
 	// return the memoized result
-	anyOutput := currentMoment.Output()
+	anyOutput, ok := currentMoment.Output().Get()
+	if !ok {
+		panic(ftrerrors.InconsistentStateError(fmt.Errorf("expected moment to have a valid output, but it was not")))
+	}
 	if anyOutput == nil {
 		return
 	}

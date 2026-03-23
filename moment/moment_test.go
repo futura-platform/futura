@@ -19,6 +19,7 @@ func TestValidate(t *testing.T) {
 			return args, nil
 		})
 		moment1 := moment.NewMoment(fn, 1)
+		moment1.SetValidOutput("something")
 		assert.True(t, moment1.Validate(0, fn, 1, moment.Identity{}))
 	})
 	t.Run("invalid cases", func(t *testing.T) {
@@ -34,6 +35,7 @@ func TestValidate(t *testing.T) {
 				return args, nil
 			})
 			moment1 := moment.NewMoment(fn, 1)
+			moment1.SetValidOutput("something")
 			assert.True(t, moment1.Validate(0, fn, 1, moment.Identity{}))
 
 			moment1.Invalidate()
@@ -72,7 +74,9 @@ func TestOutput(t *testing.T) {
 	moment1 := moment.NewMoment(fn, 1)
 	output := rand.Int()
 	moment1.SetValidOutput(output)
-	assert.Equal(t, output, moment1.Output())
+	outFromMoment, ok := moment1.Output().Get()
+	assert.True(t, ok)
+	assert.Equal(t, output, outFromMoment)
 }
 
 func TestMomentFnChangeError(t *testing.T) {

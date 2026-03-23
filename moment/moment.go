@@ -5,6 +5,7 @@ import (
 	"runtime"
 
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/samber/mo"
 )
 
 // A Moment represents an Fn instance and its returned successful output at a specific point in time.
@@ -12,8 +13,7 @@ import (
 type Moment struct {
 	callableName string
 	input        any
-	output       any
-	invalidated  bool
+	output       mo.Option[any]
 }
 
 type anyFn interface {
@@ -41,20 +41,19 @@ func (m Moment) Validate(index int, againstFn anyFn, input any, identity Identit
 			Identity:        identity,
 		}))
 	}
-	return m.input == input && !m.invalidated
+	return m.input == input && m.output.IsSome()
 }
 
-func (m Moment) Output() any {
+func (m Moment) Output() mo.Option[any] {
 	return m.output
 }
 
 func (m *Moment) SetValidOutput(output any) {
-	m.output = output
-	m.invalidated = false
+	m.output = mo.Some(output)
 }
 
 func (m *Moment) Invalidate() {
-	m.invalidated = true
+	m.output = mo.None[any]()
 }
 
 // identities should always lead to the same fn. If they don't, this error is thrown.
