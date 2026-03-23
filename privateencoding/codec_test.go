@@ -15,6 +15,7 @@ import (
 	"github.com/futura-platform/futura/ftype/seal"
 	"github.com/futura-platform/futura/moment"
 	"github.com/futura-platform/futura/privateencoding"
+	"github.com/samber/mo"
 	"github.com/futura-platform/futura/privateencoding/internal/otherpackage"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/utils/diff"
@@ -317,13 +318,34 @@ func TestCodecURLPointerInMomentOutput(t *testing.T) {
 	assert.NotPanics(t, func() {
 		decoded, err := applyCodec(value)
 		assert.NoError(t, err)
-		if assert.IsType(t, &url.URL{}, decoded.Output()) {
+		if assert.IsType(t, &url.URL{}, decoded.Output().MustGet()) {
 			assert.Equal(
 				t,
-				value.Output().(*url.URL).String(),
-				decoded.Output().(*url.URL).String(),
+				value.Output().MustGet().(*url.URL).String(),
+				decoded.Output().MustGet().(*url.URL).String(),
 			)
 		}
+	})
+}
+
+// TestCodecMoOptionSkipsBinaryMarshaler guards against using mo.Option's
+// encoding.BinaryMarshaler implementation, which serializes via gob and breaks
+// privateencoding (see isMoOptionType in encoder.go).
+func TestCodecMoOptionSkipsBinaryMarshaler(t *testing.T) {
+	t.Run("some_int", func(t *testing.T) {
+		applyCodecThenCompare(t, mo.Some(42), nil)
+	})
+	t.Run("none_int", func(t *testing.T) {
+		applyCodecThenCompare(t, mo.None[int](), nil)
+	})
+	t.Run("some_any", func(t *testing.T) {
+		applyCodecThenCompare(t, mo.Some[any](7), nil)
+	})
+	t.Run("nested_in_struct", func(t *testing.T) {
+		type holder struct {
+			O mo.Option[string]
+		}
+		applyCodecThenCompare(t, holder{O: mo.Some("encoded")}, nil)
 	})
 }
 

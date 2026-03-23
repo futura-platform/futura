@@ -65,10 +65,26 @@ func (e *Encoder[T]) encodeSimple(data any) (err error, isSimple bool) {
 
 var binaryMarshalerType = reflect.TypeFor[encoding.BinaryMarshaler]()
 
+// isMoType reports whether t is (or is a pointer to) a type from the samber/mo package.
+// These types implement encoding.BinaryMarshaler via gob, which breaks privateencoding's gaurantees.
+func isMoType(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.Kind() == reflect.Struct &&
+		t.PkgPath() == "github.com/samber/mo"
+}
+
 func implementsBinaryMarshaler(v reflect.Value) (func() encoding.BinaryMarshaler, bool) {
+	typ := v.Type()
+	if !typ.Implements(binaryMarshalerType) {
+		return nil, false
+	} else if isMoType(typ) {
+		return nil, false
+	}
 	return func() encoding.BinaryMarshaler {
 		return v.Interface().(encoding.BinaryMarshaler)
-	}, v.Type().Implements(binaryMarshalerType)
+	}, true
 }
 
 func (e *Encoder[T]) encodeInterface(v reflect.Value, path string) error {
