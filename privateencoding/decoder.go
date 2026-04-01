@@ -80,6 +80,13 @@ func implementsBinaryUnmarshaler(v reflect.Value) (func() encoding.BinaryUnmarsh
 	}
 	if !v.CanAddr() || !v.Addr().Type().Implements(binaryUnmarshalerType) {
 		return nil, false
+	}
+	// Only use an address-based binary unmarshaller for value fields when the
+	// value type would also have been binary-marshaled by the encoder. This
+	// keeps encode/decode symmetric for types like url.URL, whose pointer type
+	// implements Binary(Un)Marshaler but whose value type does not.
+	if !typ.Implements(binaryMarshalerType) {
+		return nil, false
 	} else if isMoType(typ) {
 		return nil, false
 	}

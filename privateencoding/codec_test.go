@@ -293,6 +293,21 @@ func TestCodecURLPointer(t *testing.T) {
 	})
 }
 
+func TestCodecURLValue(t *testing.T) {
+	value := url.URL{
+		Scheme:   "https",
+		Host:     "example.com",
+		Path:     "/search",
+		RawQuery: "q=futura",
+	}
+
+	assert.NotPanics(t, func() {
+		decoded, err := applyCodec(value)
+		assert.NoError(t, err)
+		assert.Equal(t, value.String(), decoded.String())
+	})
+}
+
 func TestCodecNilURLPointer(t *testing.T) {
 	var value *url.URL
 
