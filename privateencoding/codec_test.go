@@ -62,6 +62,7 @@ func TestCodec(t *testing.T) {
 	a := 1
 	t.Run("Pointer", codecTest(otherpackage.NewCodecTestStruct(&a)))
 	t.Run("Slice", codecTest(otherpackage.NewCodecTestStruct([]int{1, 2, 3})))
+	t.Run("Array", codecTest(otherpackage.NewCodecTestStruct([3]int{1, 2, 3})))
 	t.Run("Map", codecTest(otherpackage.NewCodecTestStruct(map[string]int{"a": 1, "b": 2})))
 	t.Run("Struct", codecTest(otherpackage.NewCodecTestStruct(struct{ A int }{A: 1})))
 

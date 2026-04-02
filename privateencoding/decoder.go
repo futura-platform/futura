@@ -214,6 +214,14 @@ func (d *Decoder[T]) decodeComplex(v reflect.Value, path string) error {
 				"(*"+path+")",
 			)
 		})
+	case reflect.Array:
+		for i := range v.Len() {
+			err := d.decodeValue(v.Index(i), path+"["+strconv.Itoa(i)+"]")
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	case reflect.Slice:
 		return d.decodeNillable(v, path, func() error {
 			var l int

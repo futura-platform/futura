@@ -238,6 +238,13 @@ func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
 				v.Elem(), "(*"+path+")",
 			)
 		})
+	case reflect.Array:
+		for i := range v.Len() {
+			if err := e.encodeValue(v.Index(i), path+"["+strconv.Itoa(i)+"]"); err != nil {
+				return err
+			}
+		}
+		return nil
 	case reflect.Slice:
 		return e.encodeNillable(v, path, func(v reflect.Value) error {
 			l := v.Len()
