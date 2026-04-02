@@ -13,16 +13,19 @@ type contextKey string
 const ctxKey contextKey = "sequence_index_context"
 
 type state struct {
-	flags replay.Flags
-	index int
-	seen  mapset.Set[moment.Identity]
+	flags    replay.Flags
+	index    int
+	seen     mapset.Set[moment.Identity]
+	deferred *func()
 }
 
 // With wraps the context with a new sequence index.
 func With(ctx context.Context, flags replay.Flags) context.Context {
+	deferred := func() {}
 	return context.WithValue(ctx, ctxKey, &state{
-		flags: flags,
-		seen:  mapset.NewSet[moment.Identity](),
+		flags:    flags,
+		seen:     mapset.NewSet[moment.Identity](),
+		deferred: &deferred,
 	})
 }
 
@@ -55,4 +58,20 @@ func MarkSeen(ctx context.Context, identity moment.Identity) {
 func IsSeen(ctx context.Context, identity moment.Identity) bool {
 	s := getSequenceState(ctx)
 	return s.seen.Contains(identity)
+}
+
+// Defer registers a function that will be called exactly once when the flow ends.
+// It has LIFO semantics, the same as Go's official defer statement.
+func Defer(ctx context.Context, fn func()) {
+	s := getSequenceState(ctx)
+	lastDeferred := *s.deferred
+	*s.deferred = func() {
+		fn()
+		lastDeferred()
+	}
+}
+
+// RunDeferred runs all deferred functions in reverse order of registration (LIFO).
+func RunDeferred(ctx context.Context) {
+	(*getSequenceState(ctx).deferred)()
 }

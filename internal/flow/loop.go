@@ -7,8 +7,9 @@ import (
 
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flowhooks"
 	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/flow/replay/sequence"
+	"github.com/futura-platform/futura/internal/flowhooks"
 	"github.com/futura-platform/futura/internal/step"
 )
 
@@ -35,9 +36,16 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		}
 	}()
 
+	var replayCtx context.Context
+	defer func() {
+		if replayCtx != nil {
+			sequence.RunDeferred(replayCtx)
+		}
+	}()
+
 	for {
 	restartReplay:
-		replayCtx := f.StartNewReplay(ctx)
+		replayCtx = f.StartNewReplay(ctx)
 		result, err := replay.Execute(replayCtx, callableFlow, args)
 		replay.Cancel(replayCtx, nil)
 

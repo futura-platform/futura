@@ -28,4 +28,22 @@ func TestSequenceContext(t *testing.T) {
 		})
 		assert.True(t, sequence.GetFlags(ctx).PanicOnMomentOrderChange)
 	})
+	t.Run("run deferred with none", func(t *testing.T) {
+		ctx := sequence.With(t.Context(), replay.Flags{})
+		assert.NotPanics(t, func() {
+			sequence.RunDeferred(ctx)
+		})
+	})
+	t.Run("deferred functions run in LIFO order", func(t *testing.T) {
+		ctx := sequence.With(t.Context(), replay.Flags{})
+		var calls []int
+
+		sequence.Defer(ctx, func() { calls = append(calls, 1) })
+		sequence.Defer(ctx, func() { calls = append(calls, 2) })
+		sequence.Defer(ctx, func() { calls = append(calls, 3) })
+
+		sequence.RunDeferred(ctx)
+
+		assert.Equal(t, []int{3, 2, 1}, calls)
+	})
 }

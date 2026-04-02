@@ -49,6 +49,55 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, "expected", r)
 	})
 
+	t.Run("Runs deferred functions when the flow succeeds", func(t *testing.T) {
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		var calls []int
+
+		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			sequence.Defer(ctx, func() { calls = append(calls, 1) })
+			sequence.Defer(ctx, func() { calls = append(calls, 2) })
+			return "test", nil
+		}, &struct{}{})
+
+		assert.NoError(t, err)
+		assert.Equal(t, "test", rval)
+		assert.Equal(t, []int{2, 1}, calls)
+	})
+
+	t.Run("Runs deferred functions when the flow is cancelled", func(t *testing.T) {
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		calls := 0
+
+		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			sequence.Defer(ctx, func() { calls++ })
+			return "", ftype.ErrCancelFlow
+		}, &struct{}{})
+
+		assert.ErrorIs(t, err, ftype.ErrCancelFlow)
+		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("Only runs deferred functions from the final replay", func(t *testing.T) {
+		replayErr := errors.New("retry")
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		replays := 0
+		calls := 0
+
+		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			replays++
+			sequence.Defer(ctx, func() { calls++ })
+			if replays == 1 {
+				return "", fmt.Errorf("%w: %w", step.ErrEvalFailed, replayErr)
+			}
+			return "test", nil
+		}, &struct{}{})
+
+		assert.NoError(t, err)
+		assert.Equal(t, "test", rval)
+		assert.Equal(t, 2, replays)
+		assert.Equal(t, 1, calls)
+	})
+
 	t.Run("Regular error handling for evaluation failures (should retry)", func(t *testing.T) {
 		testErr := errors.New("test error")
 		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
