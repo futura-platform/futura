@@ -25,7 +25,7 @@ func WithMaxFailures(maxFailures int32) ftype.FlowLoopOption {
 				defer persist()
 				newFailureCount := ref.Add(1)
 				if newFailureCount > maxFailures {
-					return fmt.Errorf("%w: %w: %d", ftype.ErrCancelFlow, ErrMaxFailuresReached, newFailureCount)
+					return fmt.Errorf("%w: %w: %d, last error: %w", ftype.ErrCancelFlow, ErrMaxFailuresReached, newFailureCount, err)
 				}
 			}
 			return nil
