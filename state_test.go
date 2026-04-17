@@ -109,4 +109,15 @@ func TestState(t *testing.T) {
 		assert.Equal(t, 3, fn2Calls)
 		assert.Equal(t, 5, r)
 	})
+	t.Run("the context can be cancelled before a states initial value is seeded", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		r, err := futura.NewFlow[struct{}, int]().Execute(ctx, func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			cancel()
+			state := futura.State(b, 1)
+			return state.V(), nil
+		}, struct{}{})
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.NotErrorIs(t, err, futura.ErrFlowPanic)
+		assert.Equal(t, 0, r)
+	})
 }
