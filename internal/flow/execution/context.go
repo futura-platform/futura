@@ -164,6 +164,13 @@ func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity)
 // it also marks the identity as seen.
 func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment moment.Moment) {
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		if sequence.IsSeen(ctx, identity) {
+			// if we see an identity twice in the same replay, the consumer is doing something wrong
+			panic(ftrerrors.InconsistentStateError(UnexpectedDuplicateMomentError{
+				identity: identity,
+			}))
+		}
+
 		i := sequence.GetIndex(ctx)
 		size := tx.CallOrderLength()
 		if i > size {
@@ -172,12 +179,6 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 				sequenceLength: size,
 			}))
 		} else if i == size {
-			ok := tx.HasMoment(identity)
-			if ok {
-				panic(ftrerrors.InconsistentStateError(UnexpectedCachedStateError{
-					identity: identity,
-				}))
-			}
 			tx.AppendCallOrder(identity)
 		} else {
 			tx.SetCallOrderAt(i, identity)
@@ -240,12 +241,12 @@ func (e SequenceIndexOutOfBoundsError) Error() string {
 	return fmt.Sprintf("sequenceIndex is greater than the length of the memoized moment sequence: %d > %d", e.sequenceIndex, e.sequenceLength)
 }
 
-type UnexpectedCachedStateError struct {
+type UnexpectedDuplicateMomentError struct {
 	identity moment.Identity
 }
 
-func (e UnexpectedCachedStateError) Error() string {
-	return fmt.Sprintf("identity '%s' exists in the state cache, but was not expected to be present", e.identity.String())
+func (e UnexpectedDuplicateMomentError) Error() string {
+	return fmt.Sprintf("identity '%s' was seen twice in the same replay", e.identity.String())
 }
 
 // FlowContextUsedInWrongGoroutineError is an error used to enforce a flow executing all within the same goroutine.

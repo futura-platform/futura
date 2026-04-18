@@ -225,21 +225,50 @@ func TestRecordCurrentMoment(t *testing.T) {
 		m, _ := c.GetMoment(recordKey)
 		assert.Equal(t, m, *recordMoment)
 	})
-	t.Run("unexpected cached state case", func(t *testing.T) {
+	t.Run("with existing cached state case", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+		ctx := WithFlow(t.Context(), NewFlowExecutionWithContainer(c))
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
 		recordMoment := moment.NewMoment(placeholderCallable, 1)
-
 		c.SetMoment(recordKey, *recordMoment)
-		assert.False(t, sequence.IsSeen(ctx, recordKey))
 
-		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(UnexpectedCachedStateError{
-			identity: recordKey,
-		}).Error(), func() {
+		t.Run("append to call order", func(t *testing.T) {
+			ctx = sequence.With(ctx, DefaultReplayFlags)
+
+			assert.False(t, sequence.IsSeen(ctx, recordKey))
+
 			f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
+			assert.True(t, sequence.IsSeen(ctx, recordKey))
+			assert.Equal(t, c.CallOrderAt(0), recordKey)
+			assert.Equal(t, sequence.GetIndex(ctx), 0)
+			m, _ := c.GetMoment(recordKey)
+			assert.Equal(t, m, *recordMoment)
+
+			assert.PanicsWithError(t, ftrerrors.InconsistentStateError(UnexpectedDuplicateMomentError{
+				identity: recordKey,
+			}).Error(), func() {
+				f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
+			})
+		})
+
+		t.Run("set call order at existing index", func(t *testing.T) {
+			assert.Equal(t, c.CallOrderLength(), 1)
+			ctx = sequence.With(ctx, DefaultReplayFlags)
+
+			f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
+			assert.True(t, sequence.IsSeen(ctx, recordKey))
+			assert.Equal(t, c.CallOrderAt(0), recordKey)
+			assert.Equal(t, sequence.GetIndex(ctx), 0)
+			m, _ := c.GetMoment(recordKey)
+			assert.Equal(t, m, *recordMoment)
+
+			assert.PanicsWithError(t, ftrerrors.InconsistentStateError(UnexpectedDuplicateMomentError{
+				identity: recordKey,
+			}).Error(), func() {
+				f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
+			})
 		})
 	})
 	t.Run("sequence index out of bounds", func(t *testing.T) {
