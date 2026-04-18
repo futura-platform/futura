@@ -44,7 +44,6 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 	}()
 
 	for {
-	restartReplay:
 		replayCtx = f.StartNewReplay(ctx)
 		result, err := replay.Execute(replayCtx, callableFlow, args)
 		replay.Cancel(replayCtx, nil)
@@ -53,8 +52,7 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 			// if the context is done, comply by returning immediately
 			return result, ctx.Err()
 		} else if errors.Is(context.Cause(replayCtx), execution.ErrRestartReplay) {
-			// special case to restart the replay without performing the default end of replay behavior.
-			goto restartReplay
+			// special case to always restart the replay, even if otherwise the result,err combo would be terminal
 		} else if err == nil {
 			return result, nil
 		} else if errors.Is(err, ftype.ErrCancelFlow) {
