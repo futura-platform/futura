@@ -1,12 +1,14 @@
 package privateencoding
 
 import (
+	"bytes"
 	"encoding"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"time"
 
@@ -263,17 +265,37 @@ func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
 			if err := e.mustEncodeSimple(v.Len()); err != nil {
 				return encodePathError("len("+path+")", err)
 			}
+			type sortableEntry struct {
+				key, value reflect.Value
+				encodedKey []byte
+			}
+			entries := make([]sortableEntry, 0, v.Len())
 			i := 0
 			for iter := v.MapRange(); iter.Next(); i++ {
-				iterKey := iter.Key()
-				addressableKey := reflect.New(iterKey.Type()).Elem()
-				addressableKey.Set(iterKey)
-				if err := e.encodeValue(addressableKey, path+"[key-"+strconv.Itoa(i)+"]"); err != nil {
+				encodedKey := make([]byte, 0, 32)
+				buf := bytes.NewBuffer(encodedKey)
+				enc := NewEncoder[reflect.Value](buf)
+				addressableKey := reflect.New(iter.Key().Type()).Elem()
+				addressableKey.Set(iter.Key())
+				if err := enc.encodeValue(addressableKey, path+"[key-"+strconv.Itoa(i)+"]"); err != nil {
 					return err
 				}
-				iterValue := iter.Value()
-				addressableValue := reflect.New(iterValue.Type()).Elem()
-				addressableValue.Set(iterValue)
+				entries = append(entries, sortableEntry{
+					key:        addressableKey,
+					value:      iter.Value(),
+					encodedKey: buf.Bytes(),
+				})
+			}
+			sort.Slice(entries, func(i, j int) bool {
+				return bytes.Compare(entries[i].encodedKey, entries[j].encodedKey) < 0
+			})
+			for i, entry := range entries {
+				_, err := e.w.Write(entry.encodedKey)
+				if err != nil {
+					return encodePathError(path+"[key-"+strconv.Itoa(i)+"]", err)
+				}
+				addressableValue := reflect.New(entry.value.Type()).Elem()
+				addressableValue.Set(entry.value)
 				// Use indexed path for values to avoid expensive formatting.
 				if err := e.encodeValue(addressableValue, path+"[val-"+strconv.Itoa(i)+"]"); err != nil {
 					return err

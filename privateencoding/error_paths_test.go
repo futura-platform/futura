@@ -170,9 +170,8 @@ func TestEncoder_ErrorPaths(t *testing.T) {
 		type WithMap struct {
 			Map map[string]int
 		}
-		// nil check + length + key succeeds, value fails
-		// Note: msgpack may use multiple writes for strings, so we try increasing counts
-		enc := privateencoding.NewEncoder[WithMap](newFailingWriter(4))
+		// nil check + length + encoded key write succeeds, value fails
+		enc := privateencoding.NewEncoder[WithMap](newFailingWriter(3))
 		err := enc.Encode(WithMap{Map: map[string]int{"a": 1}})
 		assertErrorContainsPath(t, err, "encode", "root.Map[val-0]")
 	})
