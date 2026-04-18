@@ -47,12 +47,24 @@ func (c *storeCountingContainer) ReadTransact(ctx context.Context, fn func(ctx c
 
 func newDurableTestBuilder(t *testing.T, exec *execution.FlowExecution, providers ...func(FlowBuilder) FlowBuilder) FlowBuilder {
 	t.Helper()
+	startExecRun(t, exec)
 	ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
 	b := newFlowBuilder(ctx, exec)
 	for _, provide := range providers {
 		b = provide(b)
 	}
 	return b
+}
+
+// startExecRun marks exec as running for the duration of the test, so that
+// FromContext-based access works in tests that bypass the production Loop path.
+func startExecRun(t *testing.T, exec *execution.FlowExecution) {
+	t.Helper()
+	stop, ok := exec.TryStartRun()
+	if !ok {
+		t.Fatalf("exec is already running")
+	}
+	t.Cleanup(stop)
 }
 
 func TestDurableHandle(t *testing.T) {
@@ -251,6 +263,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		exec := execution.NewFlowExecutionWithContainer(executiontype.NewInMemoryContainer())
+		startExecRun(t, exec)
 		flowCtx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
 
 		replayOneBuilder := h.Provide(newFlowBuilder(flowCtx, exec))
@@ -451,6 +464,46 @@ func TestDurableHandle(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, []byte{byte(77)}, value)
+	})
+
+	t.Run("persist panics if invoked after the execution has stopped running", func(t *testing.T) {
+		// The persist closure becomes unsafe to call once the FlowExecution it
+		// belongs to has stopped running, because anything stored at that point
+		// would escape the cleanup hook and silently corrupt the container for
+		// any subsequent replay. The check lives in execution.FromContext via
+		// the running flag; this test exercises that path through persist.
+		const durableKey = "persistAfterStopHandle"
+
+		h := NewDurableHandle(
+			durableKey,
+			func() *byte { v := byte(0); return &v },
+			func(input []byte) (*byte, error) { v := input[0]; return &v, nil },
+			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
+			nil,
+		)
+
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(c)
+		stop, ok := exec.TryStartRun()
+		assert.True(t, ok)
+		ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
+		b := h.Provide(newFlowBuilder(ctx, exec))
+
+		ref, persist := h.Use(b)
+		*ref = byte(1)
+		assert.True(t, persist())
+
+		stop()
+		*ref = byte(2)
+		testutil.PanicsWithErrorIs(t, execution.ErrFlowExecutionNotRunning, func() {
+			persist()
+		})
+
+		stored, ok, err := c.LoadDurable(durableKey)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, []byte{byte(1)}, stored,
+			"the post-stop persist must not have stored the new value")
 	})
 
 	t.Run("panics if marshal returns an error", func(t *testing.T) {

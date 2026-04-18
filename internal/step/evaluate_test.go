@@ -24,9 +24,22 @@ var mockStableCallstack = []runtime.Frame{{
 	Line: 1,
 }}
 
+// runningFlowCtx returns a context with a fresh, running FlowExecution attached.
+// The run is automatically stopped at the end of the test.
+func runningFlowCtx(t *testing.T) context.Context {
+	t.Helper()
+	exec := execution.NewFlowExecution()
+	stop, ok := exec.TryStartRun()
+	if !ok {
+		t.Fatalf("flow execution is already running")
+	}
+	t.Cleanup(stop)
+	return execution.WithFlow(t.Context(), exec)
+}
+
 func TestStep(t *testing.T) {
 	t.Run("memoize result for identical inputs", func(t *testing.T) {
-		replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+		replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
 			f := execution.MustFromContext(ctx)
 			ctx = f.StartNewReplay(ctx)
 
@@ -54,7 +67,7 @@ func TestStep(t *testing.T) {
 	})
 
 	t.Run("does not memoize error", func(t *testing.T) {
-		replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+		replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
 			f := execution.MustFromContext(ctx)
 			ctx = f.StartNewReplay(ctx)
 
@@ -83,7 +96,7 @@ func TestStep(t *testing.T) {
 
 	t.Run("impure flow detection", func(t *testing.T) {
 		t.Run("panics if the moment fn changes when it not allowed to", func(t *testing.T) {
-			replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+			replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
 				f := execution.MustFromContext(ctx)
 				f.SetNextFlags(func(flags *replay.Flags) {
 					flags.PanicOnMomentOrderChange = true
@@ -117,7 +130,7 @@ func TestStep(t *testing.T) {
 			}, nil)
 		})
 		t.Run("panics if a new branch is taken when it not allowed to", func(t *testing.T) {
-			replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+			replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
 				f := execution.MustFromContext(ctx)
 				f.SetNextFlags(func(flags *replay.Flags) {
 					flags.PanicOnMomentOrderChange = true
@@ -151,7 +164,7 @@ func TestStep(t *testing.T) {
 	t.Run("wraps error with label", func(t *testing.T) {
 		label := "testLabel"
 		testErr := errors.New("expected error")
-		replay.Execute(execution.WithFlow(t.Context(), execution.NewFlowExecution()), func(ctx context.Context, args any) (any, error) {
+		replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
 			f := execution.MustFromContext(ctx)
 			ctx = f.StartNewReplay(ctx)
 			_, err := evaluateWithCallstack(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (*struct{}, error) {
@@ -166,14 +179,14 @@ func TestStep(t *testing.T) {
 
 	t.Run("panics if evaluated outside of a flow function", func(t *testing.T) {
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrEvaledOutsideOfAFlowFunction).Error(), func() {
-			Evaluate(execution.WithFlow(t.Context(), execution.NewFlowExecution()), moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
+			Evaluate(runningFlowCtx(t), moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 				return nil, nil
 			}), struct{}{})
 		})
 	})
 
 	t.Run("immediately returns without executing if the context is done", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(execution.WithFlow(t.Context(), execution.NewFlowExecution()))
+		ctx, cancel := context.WithCancel(runningFlowCtx(t))
 		cancel()
 		replay.Execute(ctx, func(ctx context.Context, args any) (any, error) {
 			_, err := Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
@@ -187,7 +200,7 @@ func TestStep(t *testing.T) {
 		// this is so that we properly discover all branches of the flow. We don't
 		// want a replay trigger to evict all state past the current point.
 		t.Run("unless the cancellation came from a replay restart", func(t *testing.T) {
-			ctx, cancel := context.WithCancelCause(execution.WithFlow(t.Context(), execution.NewFlowExecution()))
+			ctx, cancel := context.WithCancelCause(runningFlowCtx(t))
 			cancel(execution.ErrRestartReplay)
 			didExecute := false
 			replay.Execute(ctx, func(ctx context.Context, args any) (any, error) {
@@ -208,7 +221,7 @@ func TestStep(t *testing.T) {
 
 	t.Run("immediately returns with the injected error if there is one", func(t *testing.T) {
 		expectedError := errors.New("expected error")
-		ctx := testutil.WithInjectedError(execution.WithFlow(t.Context(), execution.NewFlowExecution()), testutil.InjectedErrorLevelEvaluate, expectedError)
+		ctx := testutil.WithInjectedError(runningFlowCtx(t), testutil.InjectedErrorLevelEvaluate, expectedError)
 		_, err := Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 			return nil, expectedError
 		}), struct{}{})

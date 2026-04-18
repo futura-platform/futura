@@ -15,10 +15,92 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// running marks exec as running for the duration of the test, then returns it.
+// Use this in tests that exercise FromContext/MustFromContext outside of the
+// production Loop entry point (which would otherwise panic with
+// ErrFlowExecutionNotRunning).
+func running(t *testing.T, exec *FlowExecution) *FlowExecution {
+	t.Helper()
+	stop, ok := exec.TryStartRun()
+	if !ok {
+		t.Fatalf("flow execution is already running")
+	}
+	t.Cleanup(stop)
+	return exec
+}
+
+func TestFlowExecutionRunningLifecycle(t *testing.T) {
+	t.Run("Running reflects TryStartRun and stop", func(t *testing.T) {
+		exec := NewFlowExecution()
+		assert.False(t, exec.Running(), "fresh execution should not be running")
+
+		stop, ok := exec.TryStartRun()
+		assert.True(t, ok)
+		assert.True(t, exec.Running())
+
+		stop()
+		assert.False(t, exec.Running())
+	})
+
+	t.Run("TryStartRun returns false while a run is in flight", func(t *testing.T) {
+		exec := NewFlowExecution()
+		stop, ok := exec.TryStartRun()
+		assert.True(t, ok)
+		t.Cleanup(stop)
+
+		stop2, ok2 := exec.TryStartRun()
+		assert.False(t, ok2)
+		assert.Nil(t, stop2)
+	})
+
+	t.Run("a stopped execution can be started again", func(t *testing.T) {
+		exec := NewFlowExecution()
+		stop, ok := exec.TryStartRun()
+		assert.True(t, ok)
+		stop()
+
+		stop2, ok2 := exec.TryStartRun()
+		assert.True(t, ok2)
+		t.Cleanup(stop2)
+	})
+
+	t.Run("FromContext panics when the execution has not started", func(t *testing.T) {
+		exec := NewFlowExecution()
+		ctx := WithFlow(t.Context(), exec)
+		assert.PanicsWithError(t,
+			ftrerrors.InconsistentStateError(ErrFlowExecutionNotRunning).Error(),
+			func() { _, _ = FromContext(ctx) },
+		)
+	})
+
+	t.Run("FromContext panics after stop fires", func(t *testing.T) {
+		exec := NewFlowExecution()
+		ctx := WithFlow(t.Context(), exec)
+		stop, ok := exec.TryStartRun()
+		assert.True(t, ok)
+
+		_, ok = FromContext(ctx)
+		assert.True(t, ok, "FromContext should succeed while running")
+
+		stop()
+		assert.PanicsWithError(t,
+			ftrerrors.InconsistentStateError(ErrFlowExecutionNotRunning).Error(),
+			func() { _, _ = FromContext(ctx) },
+		)
+	})
+
+	t.Run("UnsafeFromContext skips the running check", func(t *testing.T) {
+		exec := NewFlowExecution()
+		ctx := WithFlow(t.Context(), exec)
+		// Even though we never started a run, this must not panic.
+		assert.Same(t, exec, UnsafeFromContext(ctx))
+	})
+}
+
 func TestWithFlow(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()
-		fOriginal := NewFlowExecution()
+		fOriginal := running(t, NewFlowExecution())
 		ctx = WithFlow(ctx, fOriginal)
 		f, ok := FromContext(ctx)
 		assert.True(t, ok)
@@ -40,7 +122,7 @@ func TestWithFlow(t *testing.T) {
 
 func TestGetFlowContext_WrongGoroutine(t *testing.T) {
 	ctx := t.Context()
-	ctx = WithFlow(ctx, NewFlowExecution())
+	ctx = WithFlow(ctx, running(t, NewFlowExecution()))
 	assert.NotPanics(t, func() { FromContext(ctx) })
 	boundGoroutineID := goid.Get()
 	t.Run("panics", func(t *testing.T) {
@@ -56,7 +138,7 @@ func TestGetFlowContext_WrongGoroutine(t *testing.T) {
 
 func TestCancelCurrentReplay(t *testing.T) {
 	ctx := t.Context()
-	ctx = WithFlow(ctx, NewFlowExecution())
+	ctx = WithFlow(ctx, running(t, NewFlowExecution()))
 	f := MustFromContext(ctx)
 	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNoCurrentReplay).Error(), func() {
 		f.RestartCurrentReplay(ctx, errors.New("placeholder"))
@@ -72,7 +154,7 @@ func TestExpectedIdentity(t *testing.T) {
 	t.Run("has expected call", func(t *testing.T) {
 		ctx := t.Context()
 		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		c.AppendCallOrder(moment.Identity{})
@@ -84,7 +166,7 @@ func TestExpectedIdentity(t *testing.T) {
 	t.Run("no expected call", func(t *testing.T) {
 		ctx := t.Context()
 		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		_, ok := f.ExpectedIdentity(ctx)
@@ -93,7 +175,7 @@ func TestExpectedIdentity(t *testing.T) {
 	t.Run("sequence index out of bounds", func(t *testing.T) {
 		ctx := t.Context()
 		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		c.AppendCallOrder(moment.Identity{})
@@ -119,7 +201,7 @@ var placeholderCallable = moment.NewFn[struct{}, struct{}](func(ctx context.Cont
 func TestGetMoment(t *testing.T) {
 	ctx := t.Context()
 	c := executiontype.NewInMemoryContainer()
-	ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
 	f := MustFromContext(ctx)
 	identity := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
 	m := moment.NewMoment(placeholderCallable, 1)
@@ -135,7 +217,7 @@ func TestGetMoment(t *testing.T) {
 func TestEvictUnseenCachedStates(t *testing.T) {
 	ctx := t.Context()
 	c := executiontype.NewInMemoryContainer()
-	ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
 	f := MustFromContext(ctx)
 	toEvict := moment.NewIdentity(ctx, moment.Callpath{{File: "toEvict"}})
 	toKeep := moment.NewIdentity(ctx, moment.Callpath{{File: "toKeep"}})
@@ -151,7 +233,7 @@ func TestEvictUnseenCachedStates(t *testing.T) {
 func TestRestartCurrentReplay(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		ctx = replay.With(ctx)
@@ -164,7 +246,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 	})
 	t.Run("no cancel current replay case", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNoCurrentReplay).Error(), func() {
 			f.RestartCurrentReplay(ctx, nil)
@@ -172,7 +254,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 	})
 	t.Run("no cancel cause case", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 		ctx = replay.With(ctx)
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
@@ -184,7 +266,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 func TestStartNewReplay(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 		replayCtx := f.StartNewReplay(ctx)
 		assert.True(t, replay.Has(replayCtx))
@@ -194,7 +276,7 @@ func TestStartNewReplay(t *testing.T) {
 func TestRecordCurrentMoment(t *testing.T) {
 	t.Run("fresh moment case", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
@@ -208,7 +290,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 	})
 	t.Run("existing moment case", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := sequence.With(WithFlow(t.Context(), NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
@@ -227,7 +309,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 	})
 	t.Run("with existing cached state case", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := WithFlow(t.Context(), NewFlowExecutionWithContainer(c))
+		ctx := WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(c)))
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
@@ -274,7 +356,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 	t.Run("sequence index out of bounds", func(t *testing.T) {
 		ctx := t.Context()
 		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, NewFlowExecutionWithContainer(c)), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		ctx = sequence.With(ctx, DefaultReplayFlags)
@@ -312,7 +394,7 @@ func TestDurable(t *testing.T) {
 
 func TestMustFromContext(t *testing.T) {
 	ctx := t.Context()
-	ctx = sequence.With(WithFlow(ctx, NewFlowExecution()), DefaultReplayFlags)
+	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
 	f := MustFromContext(ctx)
 	assert.NotNil(t, f)
 

@@ -19,6 +19,18 @@ import (
 )
 
 func loopAndAssertState[A, T any](t *testing.T, ctx context.Context, callableFlow flow.CallableFlow[A, T], args A, opts ...ftype.FlowLoopOption) (T, error) {
+	t.Helper()
+	// Loop expects an execution that's already running; mirror what Flow.Execute does.
+	exec := execution.UnsafeFromContext(ctx)
+	if exec == nil {
+		t.Fatalf("no flow execution found in context")
+	}
+	stop, ok := exec.TryStartRun()
+	if !ok {
+		t.Fatalf("flow execution is already running")
+	}
+	defer stop()
+
 	r, err := flow.Loop(ctx, callableFlow, args, opts...)
 	assert.Panics(t, func() { sequence.GetIndex(ctx) })
 	return r, err
@@ -145,7 +157,8 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("The loop should replay if the replay context was cancelled, even if the callable flow returns without an error", func(t *testing.T) {
 		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
-		f := execution.MustFromContext(ctx)
+		// Loop hasn't started the run yet; reach for the exec via the unsafe accessor.
+		f := execution.UnsafeFromContext(ctx)
 		replays := 0
 		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			if replays == 0 {
@@ -173,7 +186,7 @@ func TestLoopFlow(t *testing.T) {
 			return fmt.Sprintf("fn2 on replay %d", replays), nil
 		}, ftype.WithLabel("fn2"))
 
-		f := execution.MustFromContext(ctx)
+		f := execution.UnsafeFromContext(ctx)
 		flagsSetter := func(flags *replay.Flags) {
 			flags.PanicOnMomentOrderChange = false
 		}

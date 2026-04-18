@@ -15,6 +15,7 @@ import (
 func TestState_InternalErrorPaths(t *testing.T) {
 	t.Run("panics when state is evaluated outside of a replay flow function", func(t *testing.T) {
 		exec := execution.NewFlowExecution()
+		startExecRun(t, exec)
 		b := newFlowBuilder(execution.WithFlow(t.Context(), exec), exec)
 
 		testutil.PanicsWithErrorIs(t, step.ErrEvaledOutsideOfAFlowFunction, func() {
@@ -24,6 +25,7 @@ func TestState_InternalErrorPaths(t *testing.T) {
 
 	t.Run("panics when state key is missing from the durable state map", func(t *testing.T) {
 		exec := execution.NewFlowExecution()
+		startExecRun(t, exec)
 		ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
 		ctx = exec.StartNewReplay(ctx)
 

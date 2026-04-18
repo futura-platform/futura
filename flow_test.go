@@ -26,7 +26,10 @@ func TestFlow(t *testing.T) {
 		assert.Equal(t, "result", r)
 	})
 	t.Run("do not call Flow from within a flow", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		outerExec := execution.NewFlowExecution()
+		stop, _ := outerExec.TryStartRun()
+		defer stop()
+		ctx := execution.WithFlow(t.Context(), outerExec)
 		f1 := futura.NewFlow[*any, string]()
 		f2 := futura.NewFlow[*any, string]()
 		_, err := f1.Execute(ctx, func(b futura.FlowBuilder, _ *any) (string, error) {
@@ -105,7 +108,7 @@ func TestFlow(t *testing.T) {
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
 		assert.ErrorIs(t, err, moment.MomentFnChangeError{
 			Index:           0,
-			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 97}}),
+			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 100}}),
 			OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
 			NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
 		})

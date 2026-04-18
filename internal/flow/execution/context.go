@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"testing"
 
 	"github.com/futura-platform/futura/flog"
 	"github.com/futura-platform/futura/ftype/executiontype"
@@ -28,6 +29,14 @@ type FlowExecution struct {
 	mu        sync.RWMutex
 	nextFlags replay.Flags
 	c         executiontype.TransactionalContainer
+	// running indicates that an execution is currently in flight on this FlowExecution.
+	// It gates FromContext: callers cannot reach into the execution before it
+	// has started or after it has ended. Protected by mu.
+	//
+	// NOTE: do not call Running() (which takes mu.RLock) from inside a fn passed
+	// to Transact / ReadTransact, as those hold mu.Lock / mu.RLock respectively
+	// and sync.RWMutex is not reentrant.
+	running bool
 }
 
 var ErrTransactionFailed = errors.New("transaction failed")
@@ -210,13 +219,65 @@ func (f *FlowExecution) StoreDurable(ctx context.Context, durableKey string, sta
 	})
 }
 
+// Running reports whether an execution is currently active on this FlowExecution.
+// It is set to true by TryStartRun and back to false by the stop func it returns.
+func (f *FlowExecution) Running() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.running
+}
+
+// TryStartRun marks this FlowExecution as running. It returns (stop, true)
+// on success; stop must be called (typically deferred) to mark the run as ended.
+// If a run is already in progress, it returns (nil, false).
+func (f *FlowExecution) TryStartRun() (stop func(), ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.running {
+		return nil, false
+	}
+	f.running = true
+	return func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.running = false
+	}, true
+}
+
+// ErrFlowExecutionNotRunning is reported when code attempts to access a
+// FlowExecution via the context outside of an active run.
+// Most commonly this means a closure captured during a flow (e.g. a durable
+// handle's persist func) was invoked after the flow returned.
+var ErrFlowExecutionNotRunning = errors.New("flow execution is not running")
+
+// UnsafeFromContext returns the FlowExecution stored on ctx without performing
+// the goroutine-binding or running-state assertions that FromContext does.
+//
+// This exists exclusively for test helpers that drive a FlowExecution outside
+// of the production entry point and therefore need to reach the exec before
+// TryStartRun has been called. It panics outside of a test binary so it
+// cannot be reached for in production code by accident.
+func UnsafeFromContext(ctx context.Context) *FlowExecution {
+	if !testing.Testing() {
+		panic("execution.UnsafeFromContext is test-only; use FromContext instead")
+	}
+	v, _ := ctx.Value(flowExecutionKey).(*FlowExecution)
+	return v
+}
+
 // FromContext retrieves the flow context from the context.
-// It will panic if this is being used in a goroutine other than the one that created the context.
+// It will panic if:
+//   - the context is being used in a goroutine other than the one that created it.
+//   - the FlowExecution is not currently running (i.e. before TryStartRun or
+//     after the matching stop has fired).
 func FromContext(ctx context.Context) (*FlowExecution, bool) {
 	v, ok := ctx.Value(flowExecutionKey).(*FlowExecution)
 	if ok {
 		if err := goroutinebind.AssertBoundGoroutine(ctx); err != nil {
 			panic(ftrerrors.InconsistentStateError(err))
+		}
+		if !v.Running() {
+			panic(ftrerrors.InconsistentStateError(ErrFlowExecutionNotRunning))
 		}
 	}
 	return v, ok

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
-	"sync/atomic"
 
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
@@ -23,8 +22,7 @@ var (
 )
 
 type Flow[A, R any] struct {
-	running atomic.Bool
-	exec    *execution.FlowExecution
+	exec *execution.FlowExecution
 }
 
 // an internal helper to make sure later code doesn't forget to initialize new fields.
@@ -53,13 +51,13 @@ func NewFlowFromContainer[A, R any](c executiontype.TransactionalContainer) *Flo
 // It will continuously retry the flow until it is without error or the context is done.
 // Any panics within the flow will be caught and returned as an error.
 func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts ...ftype.FlowLoopOption) (result R, err error) {
-	if !f.running.CompareAndSwap(false, true) {
+	stopRun, ok := f.exec.TryStartRun()
+	if !ok {
 		return *new(R), ErrAlreadyRunning
 	}
-	defer f.running.Store(false)
+	defer stopRun()
 
-	_, ok := execution.FromContext(ctx)
-	if ok {
+	if _, ok := execution.FromContext(ctx); ok {
 		return *new(R), ErrTopLevelFlowConflict
 	}
 
