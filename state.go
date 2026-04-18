@@ -10,6 +10,7 @@ import (
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
+	"github.com/futura-platform/futura/internal/goroutinebind"
 	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/privateencoding"
 )
@@ -123,7 +124,10 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 			if didChange := setValue(value); !didChange {
 				return
 			}
-			f.RestartCurrentReplay(b, errors.New("state updated by setState"))
+			f.RestartCurrentReplay(b.WithContext(
+				// setState is callable anywhere, so we need to temporarily bind to the current goroutine to allow the replay to restart.
+				goroutinebind.BindGoroutine(b),
+			), errors.New("state updated by setState"))
 			f.SetNextFlags(func(flags *replay.Flags) {
 				// state changes might cause the flow to change, so we don't want to panic in that case.
 				flags.PanicOnMomentOrderChange = false

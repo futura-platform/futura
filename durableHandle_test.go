@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -400,6 +401,56 @@ func TestDurableHandle(t *testing.T) {
 		testutil.PanicsWithErrorIs(t, expectedErr, func() { errHandle.Use(b) })
 		assert.Equal(t, 0, constructorCalls)
 		assert.Equal(t, 1, unmarshalCalls)
+	})
+
+	t.Run("persist can be called from a different goroutine than Use", func(t *testing.T) {
+		// The persist closure must be safely callable from any goroutine, even
+		// though the underlying execution context is bound to the goroutine
+		// that created it. persist re-binds the context to its own goroutine
+		// before touching the execution container; without that rebind,
+		// MustFromContext would panic via AssertBoundGoroutine.
+		const durableKey = "persistCrossGoroutineHandle"
+
+		h := NewDurableHandle(
+			durableKey,
+			func() *byte {
+				v := byte(0)
+				return &v
+			},
+			func(input []byte) (*byte, error) {
+				v := input[0]
+				return &v, nil
+			},
+			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
+			nil,
+		)
+
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(c)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref, persist := h.Use(b)
+		*ref = byte(77)
+
+		var (
+			didChange     bool
+			persistErr    any
+			persistDoneWg sync.WaitGroup
+		)
+		persistDoneWg.Go(func() {
+			assert.NotPanics(t, func() {
+				didChange = persist()
+			})
+		})
+		persistDoneWg.Wait()
+
+		assert.Nil(t, persistErr, "persist should not panic when called from a different goroutine")
+		assert.True(t, didChange)
+
+		value, ok, err := c.LoadDurable(durableKey)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, []byte{byte(77)}, value)
 	})
 
 	t.Run("panics if marshal returns an error", func(t *testing.T) {

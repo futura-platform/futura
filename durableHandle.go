@@ -12,6 +12,7 @@ import (
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flowhooks"
+	"github.com/futura-platform/futura/internal/goroutinebind"
 )
 
 type DurableHandle[T any] struct {
@@ -207,6 +208,7 @@ func (d *DurableHandle[T]) Use(ctx context.Context) (ref *T, persist func() (did
 
 	ref = r.resolve(ctx, d)
 	return ref, func() bool {
+
 		serialized, err := d.marshal(ref)
 		if err != nil {
 			panic(err)
@@ -214,6 +216,9 @@ func (d *DurableHandle[T]) Use(ctx context.Context) (ref *T, persist func() (did
 
 		// don't call store if the value hasn't changed
 		localChecksum := xxhash.Sum64(serialized)
+
+		// persist is callable anywhere, so we need to temporarily bind to the current goroutine to allow the store to happen.
+		ctx = goroutinebind.BindGoroutine(ctx)
 
 		r.durableMu.Lock()
 		defer r.durableMu.Unlock()

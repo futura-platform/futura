@@ -3,6 +3,7 @@ package futura_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/futura-platform/futura"
@@ -149,5 +150,18 @@ func TestState(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.NotErrorIs(t, err, futura.ErrFlowPanic)
 		assert.Equal(t, 0, r)
+	})
+	t.Run("setState is callable from any goroutine", func(t *testing.T) {
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			state := futura.State(b, 1)
+			var wg sync.WaitGroup
+			wg.Go(func() {
+				state.Set(2)
+			})
+			wg.Wait()
+			return state.V(), nil
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 2, r)
 	})
 }
