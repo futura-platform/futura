@@ -12,7 +12,6 @@ import (
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/privateencoding"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 // this isn't exported so that StateContainer can be comparable
@@ -34,18 +33,23 @@ func (s stateContainerImplementation[T]) Set(value T) {
 	s.setState(value)
 }
 
-var stateContext = NewDurableHandle[map[string][]byte](
+var stateContext = NewDurableHandle(
 	"state",
 	func() *map[string][]byte {
 		return &map[string][]byte{}
 	},
 	func(data []byte) (*map[string][]byte, error) {
-		var state map[string][]byte
-		err := msgpack.Unmarshal(data, &state)
+		decoder := privateencoding.NewDecoder[map[string][]byte](bytes.NewReader(data))
+		state, err := decoder.Decode()
 		return &state, err
 	},
 	func(data *map[string][]byte) ([]byte, error) {
-		return msgpack.Marshal(*data)
+		var buffer bytes.Buffer
+		encoder := privateencoding.NewEncoder[map[string][]byte](&buffer)
+		if err := encoder.Encode(*data); err != nil {
+			return nil, err
+		}
+		return buffer.Bytes(), nil
 	},
 	nil,
 )
