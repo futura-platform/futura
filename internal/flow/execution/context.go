@@ -79,7 +79,7 @@ func (f *FlowExecution) EvictUnseenCachedMoments(ctx context.Context) {
 		for identity := range tx.KnownMoments() {
 			if !sequence.IsSeen(ctx, identity) {
 				tx.DeleteMoment(identity)
-				l.LogAttrs(ctx, slog.LevelDebug, "evicted unseen state",
+				l.LogAttrs(ctx, slog.LevelDebug, "evicted unseen moment",
 					slog.String("identity", identity.String()),
 				)
 			}
