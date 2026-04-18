@@ -96,4 +96,14 @@ func TestCall(t *testing.T) {
 		assert.Equal(t, "result", output)
 		assert.ErrorIs(t, err, expectedError)
 	})
+
+	t.Run("calls an fn that adds a goroutine that is not removed before the fn returns, causing the step to fail", func(t *testing.T) {
+		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
+			ActiveGoroutinesFrom(ctx).Add(1)
+			return "result", nil
+		})
+		testutil.PanicsWithErrorIs(t, ErrGoroutinesNotExited, func() {
+			call(t.Context(), fn, struct{}{}, nil)
+		})
+	})
 }
