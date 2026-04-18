@@ -142,7 +142,7 @@ func TestEvictUnseenCachedStates(t *testing.T) {
 	c.SetMoment(toEvict, moment.Moment{})
 	c.SetMoment(toKeep, moment.Moment{})
 	sequence.MarkSeen(ctx, toKeep)
-	f.EvictUnseenCachedStates(ctx)
+	f.EvictUnseenCachedMoments(ctx)
 
 	assert.False(t, c.HasMoment(toEvict))
 	assert.True(t, c.HasMoment(toKeep))

@@ -73,7 +73,7 @@ func WithFlow(ctx context.Context, exec *FlowExecution) context.Context {
 	return context.WithValue(goroutinebind.BindGoroutine(ctx), flowExecutionKey, exec)
 }
 
-func (f *FlowExecution) EvictUnseenCachedStates(ctx context.Context) {
+func (f *FlowExecution) EvictUnseenCachedMoments(ctx context.Context) {
 	l := flog.FromContext(ctx)
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		for identity := range tx.KnownMoments() {

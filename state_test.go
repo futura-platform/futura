@@ -51,6 +51,36 @@ func TestState(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 2, r)
 	})
+	t.Run("setState does not evict unseen cached states within the same replay", func(t *testing.T) {
+		replays := 0
+		unseenAtStateEvals := 0
+		eventOrder := []string{}
+		futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			replays++
+			state := futura.State(b, false)
+			if replays == 2 {
+				eventOrder = append(eventOrder, "stateSet")
+				state.Set(true)
+			}
+			err := futura.Action(b, func(ctx context.Context) error {
+				unseenAtStateEvals++
+				eventOrder = append(eventOrder, "unseenAtStateEval")
+				return nil
+			})
+			if err != nil {
+				return 0, err
+			}
+			return 1, futura.Action(b, func(ctx context.Context) error {
+				if replays < 2 {
+					return errors.New("keep replaying")
+				}
+				return nil
+			})
+		}, struct{}{})
+		assert.Equal(t, 3, replays)
+		assert.Equal(t, 1, unseenAtStateEvals)
+		assert.Equal(t, []string{"unseenAtStateEval", "stateSet"}, eventOrder)
+	})
 	t.Run("state is restored after execution is restarted from the same container", func(t *testing.T) {
 		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 1)

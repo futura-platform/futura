@@ -67,6 +67,6 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		}
 
 		// perform eviction here, after potential replays are completed
-		f.EvictUnseenCachedStates(replayCtx)
+		f.EvictUnseenCachedMoments(replayCtx)
 	}
 }

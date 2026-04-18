@@ -128,7 +128,6 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 				// state changes might cause the flow to change, so we don't want to panic in that case.
 				flags.PanicOnMomentOrderChange = false
 			})
-			f.EvictUnseenCachedStates(b)
 		},
 	}
 }
