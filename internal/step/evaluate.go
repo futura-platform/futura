@@ -54,7 +54,7 @@ func evaluateWithCallstack[A comparable, R any](
 	args A,
 	callstack []runtime.Frame,
 ) (output R, err error) {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && !errors.Is(context.Cause(ctx), execution.ErrRestartReplay) {
 		err = ctx.Err()
 		return
 	}

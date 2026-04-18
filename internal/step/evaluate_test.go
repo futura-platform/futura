@@ -175,16 +175,35 @@ func TestStep(t *testing.T) {
 	t.Run("immediately returns without executing if the context is done", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(execution.WithFlow(t.Context(), execution.NewFlowExecution()))
 		cancel()
-		didExecute := false
 		replay.Execute(ctx, func(ctx context.Context, args any) (any, error) {
 			_, err := Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 				t.Fatal("should not have executed")
 				return nil, nil
 			}), struct{}{})
 			assert.ErrorIs(t, err, context.Canceled)
-			assert.False(t, didExecute)
 			return nil, nil
 		}, nil)
+
+		// this is so that we properly discover all branches of the flow. We don't
+		// want a replay trigger to evict all state past the current point.
+		t.Run("unless the cancellation came from a replay restart", func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(execution.WithFlow(t.Context(), execution.NewFlowExecution()))
+			cancel(execution.ErrRestartReplay)
+			didExecute := false
+			replay.Execute(ctx, func(ctx context.Context, args any) (any, error) {
+				f := execution.MustFromContext(ctx)
+				ctx = f.StartNewReplay(ctx)
+
+				result, err := Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+					didExecute = true
+					return "success", nil
+				}), struct{}{})
+				assert.NoError(t, err)
+				assert.Equal(t, "success", result)
+				assert.True(t, didExecute)
+				return result, nil
+			}, nil)
+		})
 	})
 
 	t.Run("immediately returns with the injected error if there is one", func(t *testing.T) {
