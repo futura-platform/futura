@@ -18,7 +18,7 @@ import (
 // (like a helper function that could be called inside or out of a loop)
 type Identity struct {
 	callpath seal.Sealed[Callpath]
-	key      any
+	key      string
 }
 
 func (i Identity) Callpath() seal.Sealed[Callpath] {
@@ -26,9 +26,10 @@ func (i Identity) Callpath() seal.Sealed[Callpath] {
 }
 
 func NewIdentity(ctx context.Context, callpath Callpath) Identity {
+	key, _ := IdentityFromContext(ctx)
 	return Identity{
 		callpath: seal.Seal(callpath),
-		key:      IdentityFromContext(ctx),
+		key:      key,
 	}
 }
 
@@ -40,30 +41,24 @@ type contextKey string
 
 const ContextKey contextKey = "futura_moment_identity_key"
 
-// we need a way to stack identity keys, so that WithIdentityKey can be called multiple times to layer keys.
-// we need the structure that stores this stack to be comparable.
-// This means we must use a self referencing struct instead of a slice, since slices are not comparable.
-type compositeIdentityKey struct {
-	parent, this any
-}
-
 // WithIdentityKey is a helper function that allows you to layer identity keys.
-func WithIdentityKey[T comparable](ctx context.Context, key T) context.Context {
-	parent := IdentityFromContext(ctx)
-	var genericKey any = key
-	if parent != nil {
-		genericKey = compositeIdentityKey{
-			parent: parent,
-			this:   key,
-		}
+func WithIdentityKey(ctx context.Context, key string) context.Context {
+	parent, ok := IdentityFromContext(ctx)
+	if ok {
+		parent += "-"
 	}
 	return context.WithValue(
 		ctx,
 		ContextKey,
-		genericKey,
+		// we need a way to stack identity keys, so that WithIdentityKey can be called multiple times to layer keys.
+		// we need the structure that stores this stack to be comparable.
+		// and we need to not have any interfaces that mess with encoding.
+		// This means we must use a string.
+		parent+key,
 	)
 }
 
-func IdentityFromContext(ctx context.Context) any {
-	return ctx.Value(ContextKey)
+func IdentityFromContext(ctx context.Context) (string, bool) {
+	value, ok := ctx.Value(ContextKey).(string)
+	return value, ok
 }

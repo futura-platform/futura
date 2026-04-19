@@ -32,7 +32,7 @@ var _ context.Context = FlowBuilder{}
 // WithKey attaches a "key" to the returned FlowBuilder.
 // This is useful for looping flows, in order to identify the current iteration.
 // (similar to "key" in React)
-func (b FlowBuilder) WithKey(key any) FlowBuilder {
+func (b FlowBuilder) WithKey(key string) FlowBuilder {
 	return b.WithContext(moment.WithIdentityKey(b, key))
 }
 

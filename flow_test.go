@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -108,16 +109,16 @@ func TestFlow(t *testing.T) {
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
 		assert.ErrorIs(t, err, moment.MomentFnChangeError{
 			Index:           0,
-			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 100}}),
+			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 101}}),
 			OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
 			NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
 		})
 	})
 	t.Run("A single keyed moment identity should be able to be used with multiple moment functions", func(t *testing.T) {
 		r, err := checkMultipleMomentFunctions(t, func(b futura.FlowBuilder) futura.FlowBuilder {
-			return b.WithKey(1)
+			return b.WithKey("1")
 		}, func(b futura.FlowBuilder) futura.FlowBuilder {
-			return b.WithKey(2)
+			return b.WithKey("2")
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "fn2", r)
@@ -132,7 +133,7 @@ func TestFlow(t *testing.T) {
 		_, err := futura.NewFlow[*any, string]().
 			Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 				for i := range expectedExecCount {
-					b = b.WithKey(i)
+					b = b.WithKey(strconv.Itoa(i))
 					err := futura.Effect(b, fn, nil)
 					assert.NoError(t, err)
 				}

@@ -10,16 +10,17 @@ func TestWithIdentityKey(t *testing.T) {
 	t.Run("single layer key", func(t *testing.T) {
 		ctx := t.Context()
 		ctx = WithIdentityKey(ctx, "placeholder")
-		assert.Equal(t, "placeholder", IdentityFromContext(ctx))
+		key, ok := IdentityFromContext(ctx)
+		assert.True(t, ok)
+		assert.Equal(t, "placeholder", key)
 	})
 	t.Run("multiple layer keys", func(t *testing.T) {
 		ctx := t.Context()
 		ctx = WithIdentityKey(ctx, "placeholder")
 		ctx = WithIdentityKey(ctx, "placeholder2")
-		assert.Equal(t, compositeIdentityKey{
-			parent: "placeholder",
-			this:   "placeholder2",
-		}, IdentityFromContext(ctx))
+		key, ok := IdentityFromContext(ctx)
+		assert.True(t, ok)
+		assert.Equal(t, "placeholder-placeholder2", key)
 	})
 }
 
