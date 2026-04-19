@@ -65,13 +65,10 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 	if !ok {
 		panic(ftrerrors.InconsistentStateError(step.ErrEvaledOutsideOfAFlowFunction))
 	}
-	idCall := callstack[0]
 	stateKey := fmt.Sprintf(
-		"%T-state[%s:%s:%d](%v)",
+		"%T-state[%s](%v)",
 		initialValue,
-		idCall.Function,
-		idCall.File,
-		idCall.Line,
+		replay.CallstackToCallpath(callstack),
 		initialValue,
 	)
 	stateRef, persist := stateContext.Use(b)

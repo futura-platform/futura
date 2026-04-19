@@ -164,4 +164,22 @@ func TestState(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 2, r)
 	})
+	t.Run("setState keys on the entire user callstack, not just the top frame", func(t *testing.T) {
+		helperFn := func(b futura.FlowBuilder) futura.StateContainer[int] {
+			return futura.State(b, 0)
+		}
+		middleFn := func(b futura.FlowBuilder) (int, error) {
+			s1 := helperFn(b)
+			s2 := helperFn(b)
+			s1.Set(1)
+			assert.Equal(t, 1, s1.V())
+			assert.Equal(t, 0, s2.V())
+			return s1.V() + s2.V(), nil
+		}
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			return middleFn(b)
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r)
+	})
 }
