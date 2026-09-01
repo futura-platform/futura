@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,9 +27,8 @@ const flowExecutionKey ctxKey = "futura_flow"
 // It allows complex atomic mutations of the state.
 // ALL methods for this MUST lock the mutex. It is more than just simply ensuring thread safety. It ensures that the state is always consistent.
 type FlowExecution struct {
-	mu        sync.RWMutex
-	nextFlags replay.Flags
-	c         executiontype.TransactionalContainer
+	mu sync.RWMutex
+	c  executiontype.TransactionalContainer
 	// running indicates that an execution is currently in flight on this FlowExecution.
 	// It gates FromContext: callers cannot reach into the execution before it
 	// has started or after it has ended. Protected by mu.
@@ -63,15 +63,13 @@ func (f *FlowExecution) mustReadTransact(ctx context.Context, fn func(ctx contex
 
 func NewFlowExecution() *FlowExecution {
 	return &FlowExecution{
-		c:         executiontype.NewInMemoryContainer(),
-		nextFlags: DefaultReplayFlags,
+		c: executiontype.NewInMemoryContainer(),
 	}
 }
 
 func NewFlowExecutionWithContainer(c executiontype.TransactionalContainer) *FlowExecution {
 	return &FlowExecution{
-		c:         c,
-		nextFlags: DefaultReplayFlags,
+		c: c,
 	}
 }
 
@@ -82,20 +80,6 @@ func WithFlow(ctx context.Context, exec *FlowExecution) context.Context {
 	return context.WithValue(goroutinebind.BindGoroutine(ctx), flowExecutionKey, exec)
 }
 
-func (f *FlowExecution) EvictUnseenCachedMoments(ctx context.Context) {
-	l := flog.FromContext(ctx)
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		for identity := range tx.KnownMoments() {
-			if !sequence.IsSeen(ctx, identity) {
-				tx.DeleteMoment(identity)
-				l.LogAttrs(ctx, slog.LevelDebug, "evicted unseen moment",
-					slog.String("identity", identity.String()),
-				)
-			}
-		}
-	})
-}
-
 var (
 	ErrNoCurrentReplay      = errors.New("no current replay")
 	ErrNilCancellationCause = errors.New("current replay cancellation cause cannot be nil")
@@ -103,10 +87,10 @@ var (
 	ErrRestartReplay = errors.New("restarting replay")
 )
 
-// RestartCurrentReplay cancels the current replay, which will always start a new one.
+// restartCurrentReplay cancels the current replay, which will always start a new one.
 // (Regardless of whether or not the last replay was successful).
 // This will also skip the default end of replay behavior, including rewinding the sequence index and resetting the replay flags.
-func (f *FlowExecution) RestartCurrentReplay(ctx context.Context, cause error) {
+func (f *FlowExecution) restartCurrentReplay(ctx context.Context, cause error) {
 	if !replay.Has(ctx) {
 		panic(ftrerrors.InconsistentStateError(ErrNoCurrentReplay))
 	} else if cause == nil {
@@ -123,22 +107,72 @@ var DefaultReplayFlags = replay.Flags{
 	PanicOnMomentOrderChange: true,
 }
 
-func (f *FlowExecution) StartNewReplay(ctx context.Context) context.Context {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+var (
+	genericDurableKeyConstructor       = namespacedDurableKeyConstructor("generic")
+	sequenceEpochDurableKeyConstructor = namespacedDurableKeyConstructor("sequence_epoch")
+	dirtyEpochKey                      = sequenceEpochDurableKeyConstructor("dirty")
+	evaluatedEpochKey                  = sequenceEpochDurableKeyConstructor("evaluated")
+)
 
-	defer func() {
-		// reset to default flags
-		f.nextFlags = DefaultReplayFlags
-	}()
-	return sequence.With(replay.With(ctx), f.nextFlags)
+func (f *FlowExecution) getEpoch(tx executiontype.Container, key string) uint64 {
+	encoded, ok, err := tx.LoadDurable(key)
+	if err != nil {
+		panic(err)
+	}
+	var epoch uint64
+	if ok {
+		if _, err := binary.Decode(encoded, binary.LittleEndian, &epoch); err != nil {
+			panic(err)
+		}
+	}
+
+	return epoch
+}
+func (f *FlowExecution) setEpoch(tx executiontype.Container, key string, epoch uint64) {
+	encoded, err := binary.Append(nil, binary.LittleEndian, epoch)
+	if err != nil {
+		panic(err)
+	}
+	err = tx.StoreDurable(key, encoded)
+	if err != nil {
+		panic(err)
+	}
 }
 
-func (f *FlowExecution) SetNextFlags(fn func(flags *replay.Flags)) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, uint64) {
+	flags := DefaultReplayFlags
+	var dirtyEpoch uint64
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		dirtyEpoch = f.getEpoch(tx, dirtyEpochKey)
+		epoch := f.getEpoch(tx, evaluatedEpochKey)
+		if dirtyEpoch > epoch {
+			// we are in un charted territory, so allow moment order to change
+			flags.PanicOnMomentOrderChange = false
+		}
+	})
 
-	fn(&f.nextFlags)
+	return sequence.With(replay.With(ctx), flags), dirtyEpoch
+}
+
+func (f *FlowExecution) SettleSequence(ctx context.Context, dirtyEpoch uint64) {
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		f.setEpoch(tx, evaluatedEpochKey, dirtyEpoch)
+		tx.TruncateCallOrderAt(sequence.GetIndex(ctx))
+	})
+}
+
+func namespacedDurableKeyConstructor(namespace string) func(key string) string {
+	return func(key string) string {
+		return namespace + ":" + key
+	}
+}
+
+func (f *FlowExecution) InvalidateSequence(ctx context.Context, cause error) {
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		epoch := f.getEpoch(tx, dirtyEpochKey)
+		f.setEpoch(tx, dirtyEpochKey, epoch+1)
+	})
+	f.restartCurrentReplay(ctx, cause)
 }
 
 func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.Identity, ok bool) {
@@ -202,7 +236,7 @@ func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]b
 	var ok bool
 	var err error
 	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
-		state, ok, err = tx.LoadDurable(durableKey)
+		state, ok, err = tx.LoadDurable(genericDurableKeyConstructor(durableKey))
 	})
 	if err != nil {
 		panic(err)
@@ -212,7 +246,7 @@ func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]b
 
 func (f *FlowExecution) StoreDurable(ctx context.Context, durableKey string, state []byte) {
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		err := tx.StoreDurable(durableKey, state)
+		err := tx.StoreDurable(genericDurableKeyConstructor(durableKey), state)
 		if err != nil {
 			panic(err)
 		}

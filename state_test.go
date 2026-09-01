@@ -103,6 +103,34 @@ func TestState(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 2, r)
 	})
+	t.Run("a branch change from setState survives an interrupted replay and a restart from the same container", func(t *testing.T) {
+		flowFn := func(simulateOutage context.CancelFunc) futura.FlowFn[struct{}, int] {
+			return func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				state := futura.State(b, false)
+				if !state.V() {
+					if err := futura.Action(b, func(ctx context.Context) error { return nil }); err != nil {
+						return 0, err
+					}
+					state.Set(true)
+					// The state change should be durably persisted at this point
+					simulateOutage()
+					return 0, nil
+				}
+				return 1, futura.Action(b, func(ctx context.Context) error { return nil })
+			}
+		}
+
+		originalContainer := executiontype.NewInMemoryContainer()
+
+		ctx, cancel := context.WithCancel(t.Context())
+		_, err := futura.NewFlowFromContainer[struct{}, int](originalContainer).Execute(ctx, flowFn(cancel), struct{}{})
+		assert.ErrorIs(t, err, context.Canceled)
+
+		// move the flow into a new execution context
+		r, err := futura.NewFlowFromContainer[struct{}, int](originalContainer).Execute(t.Context(), flowFn(func() {}), struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r)
+	})
 	t.Run("state values can be used as branch conditions", func(t *testing.T) {
 		fn1Calls := 0
 		fn1 := func(_ context.Context, _ struct{}) (int, error) {

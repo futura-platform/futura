@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
 
@@ -141,12 +142,12 @@ func TestCancelCurrentReplay(t *testing.T) {
 	ctx = WithFlow(ctx, running(t, NewFlowExecution()))
 	f := MustFromContext(ctx)
 	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNoCurrentReplay).Error(), func() {
-		f.RestartCurrentReplay(ctx, errors.New("placeholder"))
+		f.restartCurrentReplay(ctx, errors.New("placeholder"))
 	})
 
 	ctx = replay.With(ctx)
 	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
-		f.RestartCurrentReplay(ctx, nil)
+		f.restartCurrentReplay(ctx, nil)
 	})
 }
 
@@ -214,22 +215,6 @@ func TestGetMoment(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestEvictUnseenCachedStates(t *testing.T) {
-	ctx := t.Context()
-	c := executiontype.NewInMemoryContainer()
-	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
-	f := MustFromContext(ctx)
-	toEvict := moment.NewIdentity(ctx, moment.Callpath{{File: "toEvict"}})
-	toKeep := moment.NewIdentity(ctx, moment.Callpath{{File: "toKeep"}})
-	c.SetMoment(toEvict, moment.Moment{})
-	c.SetMoment(toKeep, moment.Moment{})
-	sequence.MarkSeen(ctx, toKeep)
-	f.EvictUnseenCachedMoments(ctx)
-
-	assert.False(t, c.HasMoment(toEvict))
-	assert.True(t, c.HasMoment(toKeep))
-}
-
 func TestRestartCurrentReplay(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()
@@ -238,7 +223,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 
 		ctx = replay.With(ctx)
 		cancelCause := errors.New("placeholder")
-		f.RestartCurrentReplay(ctx, cancelCause)
+		f.restartCurrentReplay(ctx, cancelCause)
 
 		cause := context.Cause(ctx)
 		assert.ErrorIs(t, cause, ErrRestartReplay)
@@ -249,7 +234,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNoCurrentReplay).Error(), func() {
-			f.RestartCurrentReplay(ctx, nil)
+			f.restartCurrentReplay(ctx, nil)
 		})
 	})
 	t.Run("no cancel cause case", func(t *testing.T) {
@@ -258,7 +243,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 		f := MustFromContext(ctx)
 		ctx = replay.With(ctx)
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
-			f.RestartCurrentReplay(ctx, nil)
+			f.restartCurrentReplay(ctx, nil)
 		})
 	})
 }
@@ -373,6 +358,29 @@ func TestRecordCurrentMoment(t *testing.T) {
 			f.RecordCurrentMoment(ctx, moment.Identity{}, moment.Moment{})
 		})
 	})
+}
+
+func TestInvalidateSequence(t *testing.T) {
+	c := executiontype.NewInMemoryContainer()
+	f := NewFlowExecutionWithContainer(c)
+	ctx := f.StartNewReplay(t.Context())
+
+	getEpoch := func() uint64 {
+		t.Helper()
+		encoded, ok, err := c.LoadDurable(dirtyEpochKey)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+		var epoch uint64
+		_, err = binary.Decode(encoded, binary.LittleEndian, &epoch)
+		assert.NoError(t, err)
+		return epoch
+	}
+
+	f.InvalidateSequence(ctx, errors.New("placeholder"))
+	assert.Equal(t, uint64(1), getEpoch())
+
+	f.InvalidateSequence(ctx, errors.New("placeholder"))
+	assert.Equal(t, uint64(2), getEpoch())
 }
 
 func TestDurable(t *testing.T) {

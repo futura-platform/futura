@@ -121,14 +121,12 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 			if didChange := setValue(value); !didChange {
 				return
 			}
-			f.RestartCurrentReplay(b.WithContext(
+			b = b.WithContext(
 				// setState is callable anywhere, so we need to temporarily bind to the current goroutine to allow the replay to restart.
 				goroutinebind.BindGoroutine(b),
-			), errors.New("state updated by setState"))
-			f.SetNextFlags(func(flags *replay.Flags) {
-				// state changes might cause the flow to change, so we don't want to panic in that case.
-				flags.PanicOnMomentOrderChange = false
-			})
+			)
+			// state changes are allowed cause the flow to change, so we don't want to panic in that case.
+			f.InvalidateSequence(b, errors.New("state updated by setState"))
 		},
 	}
 }

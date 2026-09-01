@@ -9,9 +9,9 @@ import (
 
 	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/moment"
@@ -162,7 +162,7 @@ func TestLoopFlow(t *testing.T) {
 		replays := 0
 		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			if replays == 0 {
-				f.RestartCurrentReplay(ctx, errors.New("replay cancelled"))
+				f.InvalidateSequence(ctx, errors.New("replay cancelled"))
 			}
 			replays++
 			return fmt.Sprintf("success on replay %d", replays), nil
@@ -171,46 +171,58 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, "success on replay 2", rval)
 	})
 
-	t.Run("Evict cached moments when they are skipped", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+	t.Run("step memos should be stable after a branch is closed and reopened", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(c))
 
 		replays := 0
-		fn1 := moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+		stepCalls := 0
+		fn := moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+			stepCalls++
 			return fmt.Sprintf("fn1 on replay %d", replays), nil
-		}, ftype.WithLabel("fn1"))
-
-		fn2 := moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
-			if replays < 3 {
-				return "", errors.New("test error")
-			}
-			return fmt.Sprintf("fn2 on replay %d", replays), nil
-		}, ftype.WithLabel("fn2"))
+		}, ftype.WithLabel("fn"))
 
 		f := execution.UnsafeFromContext(ctx)
-		flagsSetter := func(flags *replay.Flags) {
-			flags.PanicOnMomentOrderChange = false
-		}
-		f.SetNextFlags(flagsSetter)
-
+		callOrderLengths := make([]int, 0)
 		r, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ struct{}) (r string, err error) {
-			f.SetNextFlags(flagsSetter)
 			replays++
-			r1 := "didnteval"
-			if replays != 2 {
-				r1, err = step.Evaluate(ctx, fn1, struct{}{})
+			callOrderLengths = append(callOrderLengths, c.CallOrderLength())
+
+			// the branch closes on replay 2, and reopens on replay 4. we must signal the change here
+			if replays == 2 || replays == 4 {
+				f.InvalidateSequence(ctx, errors.New("skipping the branch on this replay"))
+			}
+			// skip the step on the second+third replay to allow the invalidation to settle, then to actually skip the branch
+			if replays != 2 && replays != 3 {
+				_, err = step.Evaluate(ctx, fn, struct{}{})
 				if err != nil {
 					return "", err
 				}
 			}
-			r2, err := step.Evaluate(ctx, fn2, struct{}{})
-			if err != nil {
-				return "", err
-			}
-			return fmt.Sprintf("%s, %s", r1, r2), nil
+
+			// retry until the fn will have executed twice
+			return step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				if replays < 6 {
+					return "", fmt.Errorf("retry trigger")
+				}
+				return fmt.Sprintf("success on replay %d", replays), nil
+			}, ftype.WithLabel("success fn")), struct{}{})
 		}, struct{}{})
 		assert.NoError(t, err)
-		assert.Equal(t, 3, replays)
-		assert.Equal(t, "fn1 on replay 3, fn2 on replay 3", r)
+		assert.Equal(t, 6, replays)
+		assert.Equal(t, "success on replay 6", r)
+		assert.Equal(t, 1, stepCalls)
+
+		t.Run("the call order should be truncated after the branch is closed", func(t *testing.T) {
+			switch replays {
+			case 2:
+				assert.Equal(t, 2, c.CallOrderLength())
+			case 4:
+				assert.Equal(t, 1, c.CallOrderLength())
+			case 6:
+				assert.Equal(t, 2, c.CallOrderLength())
+			}
+		})
 	})
 
 	t.Run("End to end flow with steps", func(t *testing.T) {
@@ -272,5 +284,61 @@ func TestLoopFlow(t *testing.T) {
 				return context.WithValue(ctx, collidingKey, wrapper2Value)
 			},
 		)
+	})
+
+	t.Run("New branches can be taken if the dirty epoch is ahead of the evaluated epoch", func(t *testing.T) {
+		f := execution.NewFlowExecution()
+		ctx := execution.WithFlow(t.Context(), f)
+		replays := 0
+		newFirstCalls := 0
+		newSecondCalls := 0
+		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			replays++
+			if replays > 1 {
+				// try each of the second calls with a replay each,
+				// to make sure that the new branch is valid across all replays after the first time it is taken.
+				_, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+					newFirstCalls++
+					if newFirstCalls == 1 {
+						return "", errors.New("retry trigger")
+					}
+					return "success", nil
+				}, ftype.WithLabel("new first call")), struct{}{})
+				if err != nil {
+					return "", err
+				}
+
+				_, err = step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+					newSecondCalls++
+					if newSecondCalls == 1 {
+						return "", errors.New("retry trigger")
+					}
+					return "success", nil
+				}, ftype.WithLabel("new second call")), struct{}{})
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("success on replay %d", replays), nil
+			}
+
+			_, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				return "success", nil
+			}, ftype.WithLabel("old first call")), struct{}{})
+			if err != nil {
+				return "", err
+			}
+
+			_, err = step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				return "success", nil
+			}, ftype.WithLabel("old second call")), struct{}{})
+			if err != nil {
+				return "", err
+			}
+
+			f.InvalidateSequence(ctx, errors.New("restart to enter new branch"))
+			return "", nil
+		}, &struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, "success on replay 4", rval)
 	})
 }

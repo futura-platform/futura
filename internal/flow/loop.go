@@ -44,27 +44,33 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 	}()
 
 	for {
-		replayCtx = f.StartNewReplay(ctx)
+		var dirtyEpoch uint64
+		replayCtx, dirtyEpoch = f.StartNewReplay(ctx)
 		result, err := replay.Execute(replayCtx, callableFlow, args)
 		replay.Cancel(replayCtx, nil)
 
-		if ctx.Err() != nil {
+		switch {
+		case ctx.Err() != nil:
 			// if the context is done, comply by returning immediately
 			return result, ctx.Err()
-		} else if errors.Is(context.Cause(replayCtx), execution.ErrRestartReplay) {
-			// special case to always restart the replay, even if otherwise the result,err combo would be terminal
-		} else if err == nil {
-			return result, nil
-		} else if errors.Is(err, ftype.ErrCancelFlow) {
+		case errors.Is(context.Cause(replayCtx), execution.ErrRestartReplay):
+			// special case to always restart the replay, even if otherwise the result, err combo would be terminal
+			// if the replay was restarted, the sequence has NOT been settled, so we need to skip the settle step.
+			continue
+		case errors.Is(err, ftype.ErrCancelFlow):
 			// special case to immedieately return the error from the loop.
 			return result, err
-		} else if !errors.Is(err, step.ErrEvalFailed) {
+		case err != nil && !errors.Is(err, step.ErrEvalFailed):
 			// if this error did not come from a step evaluation failure, the flow loop should be broken.
 			// Since the flow fn is expected to be pure outside of steps, any error is expected to be unrecoverable.
 			return result, fmt.Errorf("%w: %w", ErrOccurredOutsideOfEvaluation, err)
 		}
 
-		// perform eviction here, after potential replays are completed
-		f.EvictUnseenCachedMoments(replayCtx)
+		// now that all the terminal failure states have been handled, we can settle the sequence.
+		f.SettleSequence(replayCtx, dirtyEpoch)
+
+		if err == nil {
+			return result, nil
+		}
 	}
 }

@@ -81,6 +81,11 @@ func (i *InMemoryContainer) SetCallOrderAt(index int, identity moment.Identity) 
 	i.callOrder[index] = identity
 }
 
+// TruncateCallOrderAt implements Container.
+func (i *InMemoryContainer) TruncateCallOrderAt(index int) {
+	i.callOrder = i.callOrder[:min(index+1, len(i.callOrder))]
+}
+
 // SetMoment implements Container.
 func (i *InMemoryContainer) SetMoment(identity moment.Identity, moment moment.Moment) {
 	i.memoTable[identity] = moment
