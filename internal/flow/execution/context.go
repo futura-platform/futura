@@ -108,7 +108,7 @@ var DefaultReplayFlags = replay.Flags{
 }
 
 var (
-	genericDurableKeyConstructor       = namespacedDurableKeyConstructor("generic")
+	GenericDurableKey                  = namespacedDurableKeyConstructor("generic")
 	sequenceEpochDurableKeyConstructor = namespacedDurableKeyConstructor("sequence_epoch")
 	dirtyEpochKey                      = sequenceEpochDurableKeyConstructor("dirty")
 	evaluatedEpochKey                  = sequenceEpochDurableKeyConstructor("evaluated")
@@ -236,7 +236,7 @@ func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]b
 	var ok bool
 	var err error
 	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
-		state, ok, err = tx.LoadDurable(genericDurableKeyConstructor(durableKey))
+		state, ok, err = tx.LoadDurable(GenericDurableKey(durableKey))
 	})
 	if err != nil {
 		panic(err)
@@ -246,7 +246,7 @@ func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]b
 
 func (f *FlowExecution) StoreDurable(ctx context.Context, durableKey string, state []byte) {
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		err := tx.StoreDurable(genericDurableKeyConstructor(durableKey), state)
+		err := tx.StoreDurable(GenericDurableKey(durableKey), state)
 		if err != nil {
 			panic(err)
 		}

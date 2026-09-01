@@ -116,7 +116,7 @@ func TestDurableHandle(t *testing.T) {
 		assert.Equal(t, expectedValue, *ref)
 
 		// does not store anything until persisted
-		_, ok, err := c.LoadDurable("firstHandle")
+		_, ok, err := c.LoadDurable(execution.GenericDurableKey("firstHandle"))
 		assert.NoError(t, err)
 		assert.False(t, ok)
 
@@ -124,7 +124,7 @@ func TestDurableHandle(t *testing.T) {
 		*ref = byte(101)
 		persist()
 
-		value, ok, err := c.LoadDurable("firstHandle")
+		value, ok, err := c.LoadDurable(execution.GenericDurableKey("firstHandle"))
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, []byte{byte(101)}, value)
@@ -164,7 +164,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		inner := executiontype.NewInMemoryContainer()
-		err := inner.StoreDurable(durableKey, []byte{byte(42)})
+		err := inner.StoreDurable(execution.GenericDurableKey(durableKey), []byte{byte(42)})
 		assert.NoError(t, err)
 
 		counting := &storeCountingContainer{inner: inner}
@@ -179,7 +179,7 @@ func TestDurableHandle(t *testing.T) {
 		assert.False(t, didChange)
 		assert.Equal(t, int32(0), counting.storeCalls.Load())
 
-		value, ok, err := inner.LoadDurable(durableKey)
+		value, ok, err := inner.LoadDurable(execution.GenericDurableKey(durableKey))
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, []byte{byte(42)}, value)
@@ -195,7 +195,7 @@ func TestDurableHandle(t *testing.T) {
 		assert.False(t, didChange)
 		assert.Equal(t, int32(1), counting.storeCalls.Load())
 
-		value, ok, err = inner.LoadDurable(durableKey)
+		value, ok, err = inner.LoadDurable(execution.GenericDurableKey(durableKey))
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, []byte{byte(43)}, value)
@@ -300,7 +300,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		c := executiontype.NewInMemoryContainer()
-		err := c.StoreDurable(durableKey, []byte{byte(42)})
+		err := c.StoreDurable(execution.GenericDurableKey(durableKey), []byte{byte(42)})
 		assert.NoError(t, err)
 
 		exec := execution.NewFlowExecutionWithContainer(c)
@@ -347,7 +347,7 @@ func TestDurableHandle(t *testing.T) {
 		didChange := persist2()
 		assert.True(t, didChange)
 
-		serialized, ok, err := c.LoadDurable(durableKey)
+		serialized, ok, err := c.LoadDurable(execution.GenericDurableKey(durableKey))
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, []byte{byte(9)}, serialized)
@@ -406,7 +406,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		c := executiontype.NewInMemoryContainer()
-		err := c.StoreDurable("unmarshalErrHandle", []byte{123})
+		err := c.StoreDurable(execution.GenericDurableKey("unmarshalErrHandle"), []byte{123})
 		assert.NoError(t, err)
 		exec := execution.NewFlowExecutionWithContainer(c)
 		b := newDurableTestBuilder(t, exec, errHandle.Provide)
@@ -460,7 +460,7 @@ func TestDurableHandle(t *testing.T) {
 		assert.Nil(t, persistErr, "persist should not panic when called from a different goroutine")
 		assert.True(t, didChange)
 
-		value, ok, err := c.LoadDurable(durableKey)
+		value, ok, err := c.LoadDurable(execution.GenericDurableKey(durableKey))
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, []byte{byte(77)}, value)
@@ -499,7 +499,7 @@ func TestDurableHandle(t *testing.T) {
 			persist()
 		})
 
-		stored, ok, err := c.LoadDurable(durableKey)
+		stored, ok, err := c.LoadDurable(execution.GenericDurableKey(durableKey))
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, []byte{byte(1)}, stored,
@@ -534,7 +534,7 @@ func TestDurableHandle(t *testing.T) {
 		testutil.PanicsWithErrorIs(t, expectedErr, func() { persist() })
 		assert.Equal(t, 1, marshalCalls)
 
-		_, ok, err := c.LoadDurable("marshalErrHandle")
+		_, ok, err := c.LoadDurable(execution.GenericDurableKey("marshalErrHandle"))
 		assert.NoError(t, err)
 		assert.False(t, ok)
 	})

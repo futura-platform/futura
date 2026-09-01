@@ -27,7 +27,7 @@ func TestState_InternalErrorPaths(t *testing.T) {
 		exec := execution.NewFlowExecution()
 		startExecRun(t, exec)
 		ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
-		ctx = exec.StartNewReplay(ctx)
+		ctx, _ = exec.StartNewReplay(ctx)
 
 		_, err := replay.Execute(ctx, func(ctx context.Context, _ struct{}) (struct{}, error) {
 			b := stateContext.Provide(newFlowBuilder(ctx, exec))

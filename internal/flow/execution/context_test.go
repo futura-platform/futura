@@ -253,7 +253,7 @@ func TestStartNewReplay(t *testing.T) {
 		ctx := t.Context()
 		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
 		f := MustFromContext(ctx)
-		replayCtx := f.StartNewReplay(ctx)
+		replayCtx, _ := f.StartNewReplay(ctx)
 		assert.True(t, replay.Has(replayCtx))
 	})
 }
@@ -363,7 +363,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 func TestInvalidateSequence(t *testing.T) {
 	c := executiontype.NewInMemoryContainer()
 	f := NewFlowExecutionWithContainer(c)
-	ctx := f.StartNewReplay(t.Context())
+	ctx, _ := f.StartNewReplay(t.Context())
 
 	getEpoch := func() uint64 {
 		t.Helper()
