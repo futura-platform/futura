@@ -67,7 +67,7 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		}
 
 		// now that all the terminal failure states have been handled, we can settle the sequence.
-		f.SettleSequence(replayCtx, dirtyEpoch)
+		f.SettleSequence(ctx, sequence.GetIndex(replayCtx), dirtyEpoch)
 
 		if err == nil {
 			return result, nil

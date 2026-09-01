@@ -154,10 +154,10 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	return sequence.With(replay.With(ctx), flags), dirtyEpoch
 }
 
-func (f *FlowExecution) SettleSequence(ctx context.Context, dirtyEpoch uint64) {
+func (f *FlowExecution) SettleSequence(ctx context.Context, atIndex int, dirtyEpoch uint64) {
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		tx.TruncateCallOrderAt(atIndex)
 		f.setEpoch(tx, evaluatedEpochKey, dirtyEpoch)
-		tx.TruncateCallOrderAt(sequence.GetIndex(ctx))
 	})
 }
 
