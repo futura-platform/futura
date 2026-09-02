@@ -105,14 +105,16 @@ func TestFlow(t *testing.T) {
 	}
 	t.Run("A single keyless moment identity should only ever be used with a single moment function", func(t *testing.T) {
 		_, err := checkMultipleMomentFunctions(t, nil, nil)
-		_, file, _, _ := runtime.Caller(0)
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
-		assert.ErrorIs(t, err, moment.MomentFnChangeError{
-			Index:           0,
-			Identity:        moment.NewIdentity(t.Context(), []moment.Callsite{{File: file, Line: 101}}),
-			OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
-			NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
-		})
+		var fnChange moment.MomentFnChangeError
+		assert.ErrorAs(t, err, &fnChange)
+		assert.Equal(t, 0, fnChange.Index)
+		assert.Equal(t, runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(), fnChange.OldMomentFnName)
+		assert.Equal(t, runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(), fnChange.NewMomentFnName)
+		// the identity's callpath spans from the flow fn's Step call up through futura's own
+		// Execute wrapper, so pin it by its user callsite rather than reconstructing every frame.
+		_, file, _, _ := runtime.Caller(0)
+		assert.Contains(t, fnChange.Identity.Callpath().V(), moment.Callsite{File: file, Line: 101})
 	})
 	t.Run("A single keyed moment identity should be able to be used with multiple moment functions", func(t *testing.T) {
 		r, err := checkMultipleMomentFunctions(t, func(b futura.FlowBuilder) futura.FlowBuilder {

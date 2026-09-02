@@ -16,7 +16,8 @@ func TestState_InternalErrorPaths(t *testing.T) {
 	t.Run("panics when state is evaluated outside of a replay flow function", func(t *testing.T) {
 		exec := execution.NewFlowExecution()
 		startExecRun(t, exec)
-		b := newFlowBuilder(execution.WithFlow(t.Context(), exec), exec)
+		ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
+		b := stateContext.Provide(newFlowBuilder(ctx, exec))
 
 		testutil.PanicsWithErrorIs(t, step.ErrEvaledOutsideOfAFlowFunction, func() {
 			_ = stateWithInitialValue(b, 1)

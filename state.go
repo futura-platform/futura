@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/futura-platform/futura/ftype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
@@ -61,16 +62,6 @@ var (
 
 func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateContainer[T] {
 	f := execution.MustFromContext(b)
-	callstack, ok := replay.GetClosestReplayUserCallstack(0)
-	if !ok {
-		panic(ftrerrors.InconsistentStateError(step.ErrEvaledOutsideOfAFlowFunction))
-	}
-	stateKey := fmt.Sprintf(
-		"%T-state[%s](%v)",
-		initialValue,
-		replay.CallstackToCallpath(callstack),
-		initialValue,
-	)
 	stateRef, persist := stateContext.Use(b)
 
 	encode := func(value T) ([]byte, error) {
@@ -83,19 +74,24 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 		return buffer.Bytes(), nil
 	}
 
-	write := func(value []byte) {
+	write := func(stateKey string, value []byte) {
 		(*stateRef)[stateKey] = value
 		persist()
 	}
 
-	err := Effect(b, func(ctx context.Context, initialValue T) error {
+	stateKey, err := Step(b, func(ctx context.Context, initialValue T) (string, error) {
+		callstack, ok := replay.GetClosestReplayUserCallstack()
+		if !ok {
+			return "", ftrerrors.InconsistentStateError(step.ErrEvaledOutsideOfAFlowFunction)
+		}
+		stateKey := fmt.Sprintf("%T-state[%s](%v)", initialValue, replay.CallstackToCallpath(callstack), initialValue)
 		value, err := encode(initialValue)
 		if err != nil {
-			return err
+			return "", err
 		}
-		write(value)
-		return nil
-	}, initialValue)
+		write(stateKey, value)
+		return stateKey, nil
+	}, initialValue, ftype.WithLabel("stateWithInitialValue"))
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return stateContainerImplementation[T]{
@@ -141,7 +137,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 
 			// state changes are allowed to cause the flow to change, so we don't want to panic in that case.
 			f.InvalidateSequence(b)
-			write(encoded)
+			write(stateKey, encoded)
 			f.RestartCurrentReplay(b, errors.New("state updated by setState"))
 		},
 	}
