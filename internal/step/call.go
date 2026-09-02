@@ -17,13 +17,13 @@ var (
 	ErrGoroutinesNotExited        = errors.New("goroutines not exited")
 )
 
-func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], args A, callstack []runtime.Frame) (output R, err error) {
+func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity moment.Identity, args A, callstack []runtime.Frame) (output R, err error) {
 	callCount := 0
 	callFn := func() (any, error) {
 		callCount++
 		activeGoroutines, ctx := withActiveGoroutines(ctx)
 		// make sure to assign to these variables (output, err) in the correct scope (NOT THE LOCAL SCOPE OF THIS FUNCTION)
-		output, err = fn.Call(ctx, args)
+		output, err = fn.Call(ctx, identity, args)
 		if activeGoroutines.Cardinality() != 0 {
 			panic(fmt.Errorf("%w: %s", ErrGoroutinesNotExited, activeGoroutines))
 		}

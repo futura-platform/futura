@@ -36,8 +36,8 @@ func NewFn[A comparable, R any](callable Callable[A, R], options ...ftype.Moment
 	return c
 }
 
-func (fn Fn[A, R]) Call(ctx context.Context, args A) (R, error) {
-	return fn.callable(ctx, args)
+func (fn Fn[A, R]) Call(ctx context.Context, identity Identity, args A) (R, error) {
+	return fn.callable(context.WithValue(ctx, currentIdentityKey{}, identity), args)
 }
 
 func (fn Fn[A, R]) Label() string {

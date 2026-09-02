@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -39,8 +40,21 @@ func TestFnOptions(t *testing.T) {
 }
 
 func TestFnCall(t *testing.T) {
-	fn := NewFn(func(ctx context.Context, args string) (string, error) { return args, nil })
-	r, err := fn.Call(context.Background(), "test")
-	assert.NoError(t, err)
-	assert.Equal(t, "test", r)
+	identity := NewIdentity(context.Background(), Callpath{{File: "a.go", Line: 1}})
+	t.Run("invokes the callable with the args", func(t *testing.T) {
+		fn := NewFn(func(ctx context.Context, args string) (string, error) { return args, nil })
+		r, err := fn.Call(context.Background(), identity, "test")
+		assert.NoError(t, err)
+		assert.Equal(t, "test", r)
+	})
+	t.Run("the callable can read its own identity, and only while it executes", func(t *testing.T) {
+		fn := NewFn(func(ctx context.Context, _ string) (Identity, error) { return CurrentIdentity(ctx), nil })
+		seen, err := fn.Call(context.Background(), identity, "")
+		assert.NoError(t, err)
+		assert.Equal(t, identity, seen)
+
+		testutil.PanicsWithErrorIs(t, ErrNoMomentBeingEvaluated, func() {
+			CurrentIdentity(context.Background())
+		})
+	})
 }

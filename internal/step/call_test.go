@@ -20,7 +20,7 @@ func TestCall(t *testing.T) {
 			callCount++
 			return "result", expectedError
 		})
-		output, err := call(t.Context(), fn, struct{}{}, nil)
+		output, err := call(t.Context(), fn, moment.Identity{}, struct{}{}, nil)
 		assert.Equal(t, "result", output)
 		assert.ErrorIs(t, err, expectedError)
 		assert.Equal(t, 1, callCount)
@@ -35,7 +35,7 @@ func TestCall(t *testing.T) {
 			return nil
 		})
 		testutil.PanicsWithErrorIs(t, ErrDidNotCall, func() {
-			call(ctx, fn, struct{}{}, nil)
+			call(ctx, fn, moment.Identity{}, struct{}{}, nil)
 		})
 	})
 
@@ -52,7 +52,7 @@ func TestCall(t *testing.T) {
 			return nil
 		})
 		testutil.PanicsWithErrorIs(t, ErrCalledMultipleTimes, func() {
-			call(ctx, fn, struct{}{}, nil)
+			call(ctx, fn, moment.Identity{}, struct{}{}, nil)
 		})
 	})
 
@@ -73,7 +73,7 @@ func TestCall(t *testing.T) {
 			wrapperReceivedOutput, wrapperReceivedError = call()
 			return nil
 		})
-		output, err := call(ctx, fn, struct{}{}, nil)
+		output, err := call(ctx, fn, moment.Identity{}, struct{}{}, nil)
 		assert.Equal(t, 1, callCount)
 		assert.Equal(t, 1, wrapperCallCount)
 		assert.Equal(t, fn.Label(), wrapperReceivedLabel)
@@ -92,7 +92,7 @@ func TestCall(t *testing.T) {
 			call()
 			return expectedError
 		})
-		output, err := call(ctx, fn, struct{}{}, nil)
+		output, err := call(ctx, fn, moment.Identity{}, struct{}{}, nil)
 		assert.Equal(t, "result", output)
 		assert.ErrorIs(t, err, expectedError)
 	})
@@ -103,7 +103,7 @@ func TestCall(t *testing.T) {
 			return "result", nil
 		})
 		testutil.PanicsWithErrorIs(t, ErrGoroutinesNotExited, func() {
-			call(t.Context(), fn, struct{}{}, nil)
+			call(t.Context(), fn, moment.Identity{}, struct{}{}, nil)
 		})
 	})
 }

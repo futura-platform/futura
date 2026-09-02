@@ -10,7 +10,6 @@ import (
 
 	"github.com/futura-platform/futura/flog"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
-	"github.com/futura-platform/futura/internal/evaluating"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
@@ -136,7 +135,7 @@ func evaluateWithCallstack[A comparable, R any](
 	}()
 	// validate it. If it no longer valid, re execute it and update the cache
 	if needsExecution {
-		output, err = call(context.WithValue(ctx, evaluating.Key, identity), fn, args, callstack)
+		output, err = call(ctx, fn, identity, args, callstack)
 		if err != nil {
 			return
 		}

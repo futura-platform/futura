@@ -66,6 +66,29 @@ func TestStep(t *testing.T) {
 		}, nil)
 	})
 
+	t.Run("the moment fn can read its own identity, and only while it executes", func(t *testing.T) {
+		replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
+			f := execution.MustFromContext(ctx)
+			ctx, _ = f.StartNewReplay(ctx)
+
+			expected := moment.NewIdentity(ctx, replay.CallstackToCallpath(mockStableCallstack))
+			fn := moment.NewFn(func(ctx context.Context, _ struct{}) (moment.Identity, error) {
+				return moment.CurrentIdentity(ctx), nil
+			})
+
+			// on execution, the fn sees the identity the evaluator computed for it
+			seen, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
+			assert.NoError(t, err)
+			assert.Equal(t, expected, seen)
+
+			// outside of the fn, the identity is not on the context
+			testutil.PanicsWithErrorIs(t, moment.ErrNoMomentBeingEvaluated, func() {
+				moment.CurrentIdentity(ctx)
+			})
+			return nil, nil
+		}, nil)
+	})
+
 	t.Run("does not memoize error", func(t *testing.T) {
 		replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
 			f := execution.MustFromContext(ctx)
