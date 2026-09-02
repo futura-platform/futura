@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flowhooks"
@@ -208,28 +209,51 @@ func (d *DurableHandle[T]) Use(ctx context.Context) (ref *T, persist func() (did
 
 	ref = r.resolve(ctx, d)
 	return ref, func() bool {
+		// persist is callable anywhere, so we need to temporarily bind to the current goroutine to allow the store to happen.
+		boundCtx := goroutinebind.BindGoroutine(ctx)
+		exec := execution.MustFromContext(boundCtx)
+		return d.writeTo(r, func(serialized []byte) {
+			exec.StoreDurable(boundCtx, string(d.key), serialized)
+		})
+	}
+}
 
-		serialized, err := d.marshal(ref)
-		if err != nil {
+// writeTo serializes the resolved value and, if it differs from what was last stored, hands the
+// bytes to store. It returns whether store was called.
+func (d *DurableHandle[T]) writeTo(r *durableResolver[T], store func(serialized []byte)) (didChange bool) {
+	r.durableMu.Lock()
+	defer r.durableMu.Unlock()
+
+	if r.cached.value == nil {
+		return false
+	}
+	serialized, err := d.marshal(r.cached.value)
+	if err != nil {
+		panic(err)
+	}
+
+	// don't call store if the value hasn't changed
+	localChecksum := xxhash.Sum64(serialized)
+	didChange = r.cached.sync != syncLevelRemote || localChecksum != r.cached.checksum
+	if didChange {
+		store(serialized)
+		// update remote state so repeated persist calls are idempotent.
+		r.cached.checksum = localChecksum
+		r.cached.sync = syncLevelRemote
+	}
+	return didChange
+}
+
+// WriteTo writes the handle's value into tx if it has changed since it was last stored.
+// It is the transactional counterpart of persist, for callers that own the transaction.
+func (d *DurableHandle[T]) WriteTo(ctx context.Context, tx executiontype.Container) (didChange bool) {
+	r, ok := ctx.Value(d.key).(*durableResolver[T])
+	if !ok {
+		panic(fmt.Errorf("%w: %s", ErrDurableResolverNotFound, d.key))
+	}
+	return d.writeTo(r, func(serialized []byte) {
+		if err := tx.StoreDurable(execution.GenericDurableKey(string(d.key)), serialized); err != nil {
 			panic(err)
 		}
-
-		// don't call store if the value hasn't changed
-		localChecksum := xxhash.Sum64(serialized)
-
-		// persist is callable anywhere, so we need to temporarily bind to the current goroutine to allow the store to happen.
-		ctx = goroutinebind.BindGoroutine(ctx)
-
-		r.durableMu.Lock()
-		defer r.durableMu.Unlock()
-		didChange := r.cached.sync != syncLevelRemote || localChecksum != r.cached.checksum
-		if didChange {
-			exec := execution.MustFromContext(ctx)
-			exec.StoreDurable(ctx, string(d.key), serialized)
-			// update remote state so repeated persist calls are idempotent.
-			r.cached.checksum = localChecksum
-			r.cached.sync = syncLevelRemote
-		}
-		return didChange
-	}
+	})
 }

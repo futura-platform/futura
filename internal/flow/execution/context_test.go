@@ -362,26 +362,71 @@ func TestRecordCurrentMoment(t *testing.T) {
 }
 
 func TestInvalidateSequence(t *testing.T) {
-	c := executiontype.NewInMemoryContainer()
-	f := NewFlowExecutionWithContainer(c)
-	ctx, _ := f.StartNewReplay(t.Context())
-
-	getEpoch := func() uint64 {
+	getEpoch := func(t *testing.T, c *executiontype.InMemoryContainer) uint64 {
 		t.Helper()
 		encoded, ok, err := c.LoadDurable(dirtyEpochKey)
 		assert.NoError(t, err)
-		assert.True(t, ok)
+		if !ok {
+			return 0
+		}
 		var epoch uint64
 		_, err = binary.Decode(encoded, binary.LittleEndian, &epoch)
 		assert.NoError(t, err)
 		return epoch
 	}
 
-	f.InvalidateSequence(ctx)
-	assert.Equal(t, uint64(1), getEpoch())
+	t.Run("nothing is written until the invalidation is committed", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := NewFlowExecutionWithContainer(c)
 
-	f.InvalidateSequence(ctx)
-	assert.Equal(t, uint64(2), getEpoch())
+		writes := 0
+		f.InvalidateSequence(func(executiontype.Container) { writes++ })
+		assert.True(t, f.HasPendingInvalidation())
+		assert.Equal(t, uint64(0), getEpoch(t, c))
+		assert.Equal(t, 0, writes)
+
+		f.CommitInvalidation(t.Context())
+		assert.False(t, f.HasPendingInvalidation())
+		assert.Equal(t, uint64(1), getEpoch(t, c))
+		assert.Equal(t, 1, writes)
+	})
+	t.Run("every pending write is committed in the invalidation's transaction", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := NewFlowExecutionWithContainer(c)
+
+		var order []string
+		f.InvalidateSequence(func(tx executiontype.Container) {
+			order = append(order, "first")
+			assert.NoError(t, tx.StoreDurable("first", []byte{1}))
+		})
+		f.InvalidateSequence(func(tx executiontype.Container) {
+			order = append(order, "second")
+			assert.NoError(t, tx.StoreDurable("second", []byte{2}))
+		})
+		f.CommitInvalidation(t.Context())
+
+		assert.Equal(t, []string{"first", "second"}, order)
+		for _, key := range []string{"first", "second"} {
+			_, ok, err := c.LoadDurable(key)
+			assert.NoError(t, err)
+			assert.True(t, ok, key)
+		}
+		// one bump for the batch, not one per write
+		assert.Equal(t, uint64(1), getEpoch(t, c))
+	})
+	t.Run("each commit bumps the epoch once and clears the pending writes", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := NewFlowExecutionWithContainer(c)
+
+		f.InvalidateSequence(func(executiontype.Container) {})
+		f.CommitInvalidation(t.Context())
+		assert.Equal(t, uint64(1), getEpoch(t, c))
+
+		f.InvalidateSequence(func(executiontype.Container) {})
+		f.CommitInvalidation(t.Context())
+		assert.Equal(t, uint64(2), getEpoch(t, c))
+		assert.False(t, f.HasPendingInvalidation())
+	})
 }
 
 func TestSettleSequence(t *testing.T) {

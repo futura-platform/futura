@@ -37,6 +37,8 @@ type FlowExecution struct {
 	// to Transact / ReadTransact, as those hold mu.Lock / mu.RLock respectively
 	// and sync.RWMutex is not reentrant.
 	running bool
+	// pendingInvalidation holds the mutations that invalidate the sequence, in a durable form.
+	pendingInvalidation []func(tx executiontype.Container)
 }
 
 var ErrTransactionFailed = errors.New("transaction failed")
@@ -181,11 +183,32 @@ func namespacedDurableKeyConstructor(namespace string) func(key string) string {
 	}
 }
 
-func (f *FlowExecution) InvalidateSequence(ctx context.Context) {
+// InvalidateSequence records a pending invalidation of the sequence. write is called with the
+// transaction that commits it, so that the invalidation is never durable without its mutation.
+// Nothing is written until CommitInvalidation.
+func (f *FlowExecution) InvalidateSequence(write func(tx executiontype.Container)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pendingInvalidation = append(f.pendingInvalidation, write)
+}
+
+// CommitInvalidation bumps the dirty epoch and applies every pending invalidation, in one transaction.
+func (f *FlowExecution) CommitInvalidation(ctx context.Context) {
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		epoch := f.getEpoch(tx, dirtyEpochKey)
 		f.setEpoch(tx, dirtyEpochKey, epoch+1)
+		for _, write := range f.pendingInvalidation {
+			write(tx)
+		}
+		f.pendingInvalidation = nil
 	})
+}
+
+// HasPendingInvalidation reports whether an invalidation has been recorded but not yet committed.
+func (f *FlowExecution) HasPendingInvalidation() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return len(f.pendingInvalidation) > 0
 }
 
 func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.Identity, ok bool) {

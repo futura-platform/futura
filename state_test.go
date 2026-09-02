@@ -3,6 +3,7 @@ package futura_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -10,6 +11,36 @@ import (
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/stretchr/testify/assert"
 )
+
+// crashingContainer simulates the process dying partway through an execution by panicking on
+// the nth durable write, so that a fresh execution can be resumed over whatever was committed.
+type crashingContainer struct {
+	*executiontype.InMemoryContainer
+	writes  int
+	crashAt int
+}
+
+var errSimulatedCrash = errors.New("simulated crash")
+
+func (c *crashingContainer) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
+	return c.InMemoryContainer.Transact(ctx, func(ctx context.Context, _ executiontype.Container) error { return fn(ctx, c) })
+}
+
+func (c *crashingContainer) StoreDurable(key string, value []byte) error {
+	c.writes++
+	if c.writes == c.crashAt {
+		panic(errSimulatedCrash)
+	}
+	return c.InMemoryContainer.StoreDurable(key, value)
+}
+
+// executeUntilCrash runs the flow over c and reports whether it ended in the simulated crash.
+// Any other outcome is a test failure, since the crash is the only way the execution is expected to end.
+func executeUntilCrash(t *testing.T, c *crashingContainer, flowFn futura.FlowFn[struct{}, int]) {
+	t.Helper()
+	_, err := futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+	assert.ErrorIs(t, err, errSimulatedCrash)
+}
 
 func TestState(t *testing.T) {
 	t.Run("no initial value implies the default to be the type's zero value", func(t *testing.T) {
@@ -241,5 +272,35 @@ func TestState(t *testing.T) {
 		}, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
+	})
+	t.Run("consecutive state changes in one replay are committed atomically", func(t *testing.T) {
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			open := futura.State(b, false)
+			generation := futura.State(b, 0)
+			if !open.V() {
+				open.Set(true)
+				generation.Set(generation.V() + 1)
+				return 0, nil
+			}
+			return generation.V(), nil
+		}
+
+		writes := func() int {
+			c := &crashingContainer{InMemoryContainer: executiontype.NewInMemoryContainer()}
+			futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+			return c.writes
+		}()
+
+		for crashAt := 1; crashAt <= writes; crashAt++ {
+			t.Run(fmt.Sprintf("crash after write %d", crashAt), func(t *testing.T) {
+				c := &crashingContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), crashAt: crashAt}
+				executeUntilCrash(t, c, flowFn)
+
+				c.crashAt = 0
+				r, err := futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+				assert.NoError(t, err)
+				assert.Equal(t, 1, r)
+			})
+		}
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"reflect"
 
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/goroutinebind"
@@ -73,9 +74,8 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 		return buffer.Bytes(), nil
 	}
 
-	write := func(stateKey string, value []byte) {
+	stage := func(stateKey string, value []byte) {
 		(*stateRef)[stateKey] = value
-		persist()
 	}
 
 	stateKey, err := Step(b, func(ctx context.Context, initialValue T) (string, error) {
@@ -84,7 +84,8 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 		if err != nil {
 			return "", err
 		}
-		write(stateKey, value)
+		stage(stateKey, value)
+		persist()
 		return stateKey, nil
 	}, initialValue, ftype.WithLabel("stateWithInitialValue"))
 	if err != nil {
@@ -130,9 +131,10 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 				goroutinebind.BindGoroutine(b),
 			)
 
-			// state changes are allowed to cause the flow to change, so we don't want to panic in that case.
-			f.InvalidateSequence(b)
-			write(stateKey, encoded)
+			// The new value is only staged in memory here. It is committed durably, together with the
+			// sequence invalidation, when the loop handles the restart. This allows for multiple state changes to happen atomically, ensuring durability.
+			stage(stateKey, encoded)
+			f.InvalidateSequence(func(tx executiontype.Container) { stateContext.WriteTo(b, tx) })
 			f.RestartCurrentReplay(b, errors.New("state updated by setState"))
 		},
 	}

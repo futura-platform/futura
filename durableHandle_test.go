@@ -633,3 +633,158 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		assert.Equal(t, 1, cleanupCalls)
 	})
 }
+
+func TestDurableHandle_WriteTo(t *testing.T) {
+	newByteHandle := func(key string) *DurableHandle[byte] {
+		return NewDurableHandle[byte](key,
+			func() *byte {
+				v := byte(0)
+				return &v
+			},
+			func(input []byte) (*byte, error) {
+				v := input[0]
+				return &v, nil
+			},
+			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
+			nil,
+		)
+	}
+
+	// storedValue reads the handle's stored bytes straight from the container.
+	storedValue := func(t *testing.T, c *executiontype.InMemoryContainer, h *DurableHandle[byte]) ([]byte, bool) {
+		t.Helper()
+		value, ok, err := c.LoadDurable(execution.GenericDurableKey(h.Key()))
+		assert.NoError(t, err)
+		return value, ok
+	}
+
+	t.Run("writes an unstored value into the given transaction", func(t *testing.T) {
+		h := newByteHandle("writeToHandle")
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(c)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref, _ := h.Use(b)
+		*ref = byte(5)
+
+		// nothing has been stored yet
+		_, ok := storedValue(t, c, h)
+		assert.False(t, ok)
+
+		var didChange bool
+		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			didChange = h.WriteTo(b, tx)
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.True(t, didChange)
+
+		value, ok := storedValue(t, c, h)
+		assert.True(t, ok)
+		assert.Equal(t, []byte{byte(5)}, value)
+	})
+
+	t.Run("does not write when the value has not changed since it was last stored", func(t *testing.T) {
+		h := newByteHandle("writeToUnchangedHandle")
+		inner := executiontype.NewInMemoryContainer()
+		err := inner.StoreDurable(execution.GenericDurableKey(h.Key()), []byte{byte(42)})
+		assert.NoError(t, err)
+
+		counting := &storeCountingContainer{inner: inner}
+		exec := execution.NewFlowExecutionWithContainer(counting)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref, _ := h.Use(b)
+		assert.Equal(t, byte(42), *ref)
+
+		var didChange bool
+		err = counting.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			didChange = h.WriteTo(b, tx)
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.False(t, didChange)
+		assert.Equal(t, int32(0), counting.storeCalls.Load())
+	})
+
+	t.Run("writeTo and persist share the same stored checksum", func(t *testing.T) {
+		// A change stored via WriteTo must make a subsequent persist a no-op, and vice
+		// versa, since both are views of the same resolver state.
+		h := newByteHandle("writeToSharedHandle")
+		inner := executiontype.NewInMemoryContainer()
+		counting := &storeCountingContainer{inner: inner}
+		exec := execution.NewFlowExecutionWithContainer(counting)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref, persist := h.Use(b)
+
+		*ref = byte(1)
+		err := counting.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			assert.True(t, h.WriteTo(b, tx))
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.False(t, persist())
+		assert.Equal(t, int32(1), counting.storeCalls.Load())
+
+		*ref = byte(2)
+		assert.True(t, persist())
+		err = counting.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			assert.False(t, h.WriteTo(b, tx))
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, int32(2), counting.storeCalls.Load())
+	})
+
+	t.Run("is a no-op for a handle that was provided but never used", func(t *testing.T) {
+		// Provide registers the resolver, but the value is only resolved on Use, so
+		// there is nothing to compare or write.
+		h := newByteHandle("writeToUnusedHandle")
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(c)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			assert.False(t, h.WriteTo(b, tx))
+			return nil
+		})
+		assert.NoError(t, err)
+	})
+
+	t.Run("panics if the handle was never provided", func(t *testing.T) {
+		h := newByteHandle("writeToUnprovidedHandle")
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(c)
+		b := newDurableTestBuilder(t, exec)
+
+		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			testutil.PanicsWithErrorIs(t, ErrDurableResolverNotFound, func() { h.WriteTo(b, tx) })
+			return nil
+		})
+		assert.NoError(t, err)
+	})
+
+	t.Run("panics if marshal returns an error", func(t *testing.T) {
+		marshalErr := errors.New("marshal error")
+		h := NewDurableHandle[byte]("writeToMarshalErrHandle",
+			func() *byte {
+				v := byte(0)
+				return &v
+			},
+			func(input []byte) (*byte, error) { return &input[0], nil },
+			func(*byte) ([]byte, error) { return nil, marshalErr },
+			nil,
+		)
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(c)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+		h.Use(b)
+
+		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			assert.PanicsWithError(t, marshalErr.Error(), func() { h.WriteTo(b, tx) })
+			return nil
+		})
+		assert.NoError(t, err)
+	})
+}
