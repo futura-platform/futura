@@ -27,6 +27,10 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 		if activeGoroutines.Cardinality() != 0 {
 			panic(fmt.Errorf("%w: %s", ErrGoroutinesNotExited, activeGoroutines))
 		}
+		if err != nil {
+			// only check for the termination condition if the step did not exit successfully.
+			terminateIfCancelled(ctx)
+		}
 		return output, err
 	}
 	stepWrapper, ok := stepwrapper.FromContext(ctx)
@@ -47,4 +51,15 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 	}
 
 	return output, nil
+}
+
+// ErrReplayTerminated is the panic value that "terminates" a cancelled replay.
+// "terminate"-ing is a mechanism to immediately stop a replay without having to
+// propagate the error through user code.
+var ErrReplayTerminated = errors.New("replay terminated")
+
+func terminateIfCancelled(ctx context.Context) {
+	if ctx.Err() != nil {
+		panic(ErrReplayTerminated)
+	}
 }

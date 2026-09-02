@@ -48,7 +48,7 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 	for {
 		var dirtyEpoch uint64
 		replayCtx, dirtyEpoch = f.StartNewReplay(ctx)
-		result, err := replay.Execute(replayCtx, callableFlow, args)
+		result, err := executeReplay(replayCtx, callableFlow, args)
 		replay.Cancel(replayCtx, nil)
 
 		switch {
@@ -86,4 +86,19 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 			return result, nil
 		}
 	}
+}
+
+// executeReplay wraps the replay execution to catch termination panics,
+// and converts them into normal, returned, cancellation errors.
+func executeReplay[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A) (result T, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if cause, ok := r.(error); ok && errors.Is(cause, step.ErrReplayTerminated) {
+				err = context.Cause(ctx)
+				return
+			}
+			panic(r)
+		}
+	}()
+	return replay.Execute(ctx, callableFlow, args)
 }

@@ -63,4 +63,36 @@ func TestWithMaxFailures(t *testing.T) {
 		_, err = exec2FailStepTest(t.Context(), f, func() {})
 		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
 	})
+
+	t.Run("a cancellation that lands during a step is not counted as a failure", func(t *testing.T) {
+		container := executiontype.NewInMemoryContainer()
+		var cancelDuringStep context.CancelFunc
+		realFailures := 0
+		flowFn := func(b futura.FlowBuilder, _ any) (any, error) {
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (*struct{}, error) {
+				if cancelDuringStep != nil {
+					cancelDuringStep()
+					return nil, ctx.Err()
+				}
+				if realFailures < 1 {
+					realFailures++
+					return nil, errors.New("transient")
+				}
+				return nil, nil
+			}, nil)
+		}
+
+		// two executions are cancelled from inside the step
+		for range 2 {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancelDuringStep = cancel
+			_, err := futura.NewFlowFromContainer[any, any](container).Execute(ctx, flowFn, nil, fopt.WithMaxFailures(2))
+			require.ErrorIs(t, err, context.Canceled)
+		}
+
+		// a healthy execution with one real failure must still be within budget
+		cancelDuringStep = nil
+		_, err := futura.NewFlowFromContainer[any, any](container).Execute(t.Context(), flowFn, nil, fopt.WithMaxFailures(2))
+		require.NoError(t, err)
+	})
 }

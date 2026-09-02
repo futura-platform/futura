@@ -176,6 +176,58 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, "success on replay 2", rval)
 	})
 
+	t.Run("a replay terminated by a restart is restarted", func(t *testing.T) {
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		f := execution.UnsafeFromContext(ctx)
+		replays := 0
+		afterStep := 0
+		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			replays++
+			if replays == 1 {
+				f.InvalidateSequence(func(executiontype.Container) {})
+				f.RestartCurrentReplay(ctx, errors.New("restarted"))
+			}
+			if _, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				return "", nil
+			}), struct{}{}); err != nil {
+				return "", err
+			}
+			afterStep++ // unreachable on the restarted replay
+			return fmt.Sprintf("success on replay %d", replays), nil
+		}, &struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, "success on replay 2", rval)
+		assert.Equal(t, 1, afterStep)
+	})
+
+	t.Run("a replay terminated by outer cancellation returns the cancellation", func(t *testing.T) {
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx, cancel := context.WithCancel(ctx)
+		afterStep := 0
+		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			cancel()
+			if _, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				return "", nil
+			}), struct{}{}); err != nil {
+				return "", err
+			}
+			afterStep++ // unreachable
+			return "", nil
+		}, &struct{}{})
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, 0, afterStep)
+	})
+
+	t.Run("any other panic from the flow is not recovered by the loop", func(t *testing.T) {
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		expected := errors.New("user panic")
+		assert.PanicsWithError(t, expected.Error(), func() {
+			loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+				panic(expected)
+			}, &struct{}{})
+		})
+	})
+
 	t.Run("step memos should be stable after a branch is closed and reopened", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(c))

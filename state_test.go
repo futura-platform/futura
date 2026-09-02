@@ -233,13 +233,16 @@ func TestState(t *testing.T) {
 	})
 	t.Run("the context can be cancelled before a states initial value is seeded", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
+		reachedAfterSeed := false
 		r, err := futura.NewFlow[struct{}, int]().Execute(ctx, func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			cancel()
-			state := futura.State(b, 1)
+			state := futura.State(b, 1) // the seed is a step: the cancelled replay terminates here
+			reachedAfterSeed = true
 			return state.V(), nil
 		}, struct{}{})
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.NotErrorIs(t, err, futura.ErrFlowPanic)
+		assert.False(t, reachedAfterSeed)
 		assert.Equal(t, 0, r)
 	})
 	t.Run("setState is callable from any goroutine", func(t *testing.T) {
@@ -325,5 +328,54 @@ func TestState(t *testing.T) {
 		}, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
+	})
+	t.Run("a state change ends the replay at the next step, so nothing after it can act on the dead replay", func(t *testing.T) {
+		t.Run("a state declared after the change cannot leak an unseeded value into another state", func(t *testing.T) {
+			r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				trigger := futura.State(b, false)
+				total := futura.State(b, -1)
+				if !trigger.V() {
+					trigger.Set(true)
+					// the seed of this state is a step: the replay terminates here
+					source := futura.State(b, 42)
+					total.Set(source.V())
+					return 0, nil
+				}
+				return total.V(), nil
+			}, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, -1, r)
+		})
+		t.Run("a step after the change cannot be observed as a failure", func(t *testing.T) {
+			r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				ready := futura.State(b, false)
+				failures := futura.State(b, 0)
+				if !ready.V() {
+					ready.Set(true)
+				}
+				err := futura.Action(b, func(ctx context.Context) error { return ctx.Err() })
+				if err != nil {
+					failures.Set(failures.V() + 1)
+					return 0, err
+				}
+				return failures.V(), nil
+			}, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, 0, r)
+		})
+		t.Run("pure code after the change still runs, so consecutive state changes stay atomic", func(t *testing.T) {
+			r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				open := futura.State(b, false)
+				generation := futura.State(b, 0)
+				if !open.V() {
+					open.Set(true)
+					generation.Set(generation.V() + 1)
+					return 0, nil
+				}
+				return generation.V(), nil
+			}, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, 1, r)
+		})
 	})
 }

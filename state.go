@@ -115,18 +115,8 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 		return stateKey, nil
 	}, initialValue, ftype.WithLabel("stateWithInitialValue"))
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return stateContainerImplementation[T]{
-				getValue: func() T {
-					return reflect.Zero(reflect.TypeFor[T]()).Interface().(T)
-				},
-				setState: func(value T) {
-					// do nothing
-				},
-			}
-		}
-		// this should never happen
-		panic(err)
+		// the seed effect has no error case, this should never happen
+		panic(ftrerrors.InconsistentStateError(err))
 	}
 
 	return stateContainerImplementation[T]{

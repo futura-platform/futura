@@ -307,6 +307,8 @@ func (f *FlowExecution) TryStartRun() (stop func(), ok bool) {
 		return nil, false
 	}
 	f.running = true
+	// anything left pending belongs to a run that never committed it, and is discarded.
+	f.pendingInvalidation = nil
 	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
