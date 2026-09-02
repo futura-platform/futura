@@ -10,9 +10,8 @@ import (
 	"github.com/futura-platform/futura/ftype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/goroutinebind"
-	"github.com/futura-platform/futura/internal/step"
+	"github.com/futura-platform/futura/moment"
 	"github.com/futura-platform/futura/privateencoding"
 )
 
@@ -80,11 +79,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 	}
 
 	stateKey, err := Step(b, func(ctx context.Context, initialValue T) (string, error) {
-		callstack, ok := replay.GetClosestReplayUserCallstack()
-		if !ok {
-			return "", ftrerrors.InconsistentStateError(step.ErrEvaledOutsideOfAFlowFunction)
-		}
-		stateKey := fmt.Sprintf("%T-state[%s](%v)", initialValue, replay.CallstackToCallpath(callstack), initialValue)
+		stateKey := fmt.Sprintf("%T-state[%s](%v)", initialValue, moment.CurrentIdentity(ctx), initialValue)
 		value, err := encode(initialValue)
 		if err != nil {
 			return "", err

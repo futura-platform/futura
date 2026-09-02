@@ -2,9 +2,12 @@ package moment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/futura-platform/futura/ftype/seal"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/evaluating"
 )
 
 // Identity is a unique identifier for a moment.
@@ -61,4 +64,16 @@ func WithIdentityKey(ctx context.Context, key string) context.Context {
 func IdentityFromContext(ctx context.Context) (string, bool) {
 	value, ok := ctx.Value(ContextKey).(string)
 	return value, ok
+}
+
+var ErrNoMomentBeingEvaluated = errors.New("no moment is being evaluated")
+
+// CurrentIdentity returns the identity of the moment function that is currently executing.
+// It panics if called outside of a moment fn.
+func CurrentIdentity(ctx context.Context) Identity {
+	identity, ok := ctx.Value(evaluating.Key).(Identity)
+	if !ok {
+		panic(ftrerrors.InconsistentStateError(ErrNoMomentBeingEvaluated))
+	}
+	return identity
 }
