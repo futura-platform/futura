@@ -8,11 +8,12 @@ import (
 	"github.com/futura-platform/futura/moment"
 )
 
-// Retrying runs every transaction closure attempts times, the way a transactional backend
-// does when it retries on conflict. Only the last attempt's writes are committed.
-type Retrying struct {
-	inner    executiontype.TransactionalContainer
-	attempts int
+// Strict models the transactional backends the runtime is expected to run over.
+// Every transaction closure is run Attempts times, the way a backend does when it retries on conflict,
+// and only the last attempt's writes are committed.
+// A transaction whose ctx is done is refused with its error, the way a backend that honors ctx does.
+type Strict struct {
+	inner executiontype.TransactionalContainer
 
 	// StaleView, if set, is applied to the view of every discarded attempt,
 	// to model the conflicting state that caused the retry.
@@ -21,42 +22,53 @@ type Retrying struct {
 	Calls int
 }
 
-var _ executiontype.TransactionalContainer = &Retrying{}
+var _ executiontype.TransactionalContainer = &Strict{}
 
-func NewRetrying(inner executiontype.TransactionalContainer, attempts int) *Retrying {
-	if attempts < 1 {
-		panic("a transaction needs at least one attempt")
-	}
-	return &Retrying{inner: inner, attempts: attempts}
+// Attempts is how many times every transaction closure is run.
+const Attempts = 3
+
+func NewStrict(inner executiontype.TransactionalContainer) *Strict {
+	return &Strict{inner: inner}
 }
 
-func (r *Retrying) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
-	return r.inner.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
-		if err := r.discard(ctx, tx, func(ctx context.Context, view *overlay) error { return fn(ctx, view) }); err != nil {
+// NewInMemory returns a strict container over a fresh in-memory one.
+func NewInMemory() *Strict {
+	return NewStrict(executiontype.NewInMemoryContainer())
+}
+
+func (s *Strict) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.inner.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
+		if err := s.discard(ctx, tx, func(ctx context.Context, view *overlay) error { return fn(ctx, view) }); err != nil {
 			return err
 		}
-		r.Calls++
+		s.Calls++
 		return fn(ctx, tx)
 	})
 }
 
-func (r *Retrying) ReadTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.ReadOnlyContainer) error) error {
-	return r.inner.ReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error {
-		if err := r.discard(ctx, tx, func(ctx context.Context, view *overlay) error { return fn(ctx, view) }); err != nil {
+func (s *Strict) ReadTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.ReadOnlyContainer) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.inner.ReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error {
+		if err := s.discard(ctx, tx, func(ctx context.Context, view *overlay) error { return fn(ctx, view) }); err != nil {
 			return err
 		}
-		r.Calls++
+		s.Calls++
 		return fn(ctx, tx)
 	})
 }
 
 // discard runs fn against a throwaway view of tx for every attempt but the last.
-func (r *Retrying) discard(ctx context.Context, tx executiontype.ReadOnlyContainer, fn func(ctx context.Context, view *overlay) error) error {
-	for range r.attempts - 1 {
-		r.Calls++
+func (s *Strict) discard(ctx context.Context, tx executiontype.ReadOnlyContainer, fn func(ctx context.Context, view *overlay) error) error {
+	for range Attempts - 1 {
+		s.Calls++
 		view := newOverlay(tx)
-		if r.StaleView != nil {
-			r.StaleView(view)
+		if s.StaleView != nil {
+			s.StaleView(view)
 		}
 		if err := fn(ctx, view); err != nil {
 			return err

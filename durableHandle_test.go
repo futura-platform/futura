@@ -79,12 +79,12 @@ func TestDurableHandle(t *testing.T) {
 
 	t.Run("panics use is called before anything is provided", func(t *testing.T) {
 		testutil.PanicsWithErrorIs(t, ErrDurableResolverNotFound, func() {
-			handle.Use(newFlowBuilder(t.Context(), execution.NewFlowExecution()))
+			handle.Use(newFlowBuilder(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory())))
 		})
 	})
 
 	t.Run("panics if provide is called without handles cache", func(t *testing.T) {
-		exec := execution.NewFlowExecution()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newFlowBuilder(execution.WithFlow(t.Context(), exec), exec)
 		testutil.PanicsWithErrorIs(t, ErrDurableHandlesNotFound, func() {
 			handle.Provide(b)
@@ -92,7 +92,7 @@ func TestDurableHandle(t *testing.T) {
 	})
 
 	t.Run("panics if the context already has a value for the key", func(t *testing.T) {
-		exec := execution.NewFlowExecution()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newDurableTestBuilder(t, exec, handle.Provide)
 		testutil.PanicsWithErrorIs(t, ErrDurableResolverAlreadyProvided, func() {
 			handle.Provide(b)
@@ -101,7 +101,7 @@ func TestDurableHandle(t *testing.T) {
 
 	t.Run("panics if another handle with the same key is used to access the value", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, handle.Provide)
 
 		otherHandle := NewDurableHandle[byte]("firstHandle", nil, nil, nil, nil)
@@ -110,7 +110,7 @@ func TestDurableHandle(t *testing.T) {
 
 	t.Run("returns the correct value", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, handle.Provide)
 
 		ref, persist := handle.Use(b)
@@ -141,7 +141,7 @@ func TestDurableHandle(t *testing.T) {
 		copy, err := decoder.Decode()
 		assert.NoError(t, err)
 
-		execCopy := execution.NewFlowExecutionWithContainer(copy)
+		execCopy := execution.NewFlowExecutionWithContainer(containertest.NewStrict(copy))
 		bCopy := newDurableTestBuilder(t, execCopy, handle.Provide)
 		ref, _ = handle.Use(bCopy)
 		assert.Equal(t, byte(101), *ref)
@@ -169,7 +169,7 @@ func TestDurableHandle(t *testing.T) {
 		assert.NoError(t, err)
 
 		counting := &storeCountingContainer{inner: inner}
-		exec := execution.NewFlowExecutionWithContainer(counting)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(counting))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, persist := h.Use(b)
@@ -226,7 +226,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, callsHandle.Provide)
 
 		ref1, persist := callsHandle.Use(b)
@@ -263,7 +263,7 @@ func TestDurableHandle(t *testing.T) {
 			nil,
 		)
 
-		exec := execution.NewFlowExecutionWithContainer(executiontype.NewInMemoryContainer())
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		startExecRun(t, exec)
 		flowCtx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
 
@@ -304,7 +304,7 @@ func TestDurableHandle(t *testing.T) {
 		err := c.StoreDurable(execution.GenericDurableKey(durableKey), []byte{byte(42)})
 		assert.NoError(t, err)
 
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref1, _ := h.Use(b)
@@ -337,7 +337,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, _ := h.Use(b)
@@ -373,7 +373,7 @@ func TestDurableHandle(t *testing.T) {
 
 		inner := executiontype.NewInMemoryContainer()
 		counting := &storeCountingContainer{inner: inner}
-		exec := execution.NewFlowExecutionWithContainer(counting)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(counting))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref1, persist1 := h.Use(b)
@@ -409,7 +409,7 @@ func TestDurableHandle(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		err := c.StoreDurable(execution.GenericDurableKey("unmarshalErrHandle"), []byte{123})
 		assert.NoError(t, err)
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, errHandle.Provide)
 
 		testutil.PanicsWithErrorIs(t, expectedErr, func() { errHandle.Use(b) })
@@ -440,7 +440,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, persist := h.Use(b)
@@ -484,7 +484,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		stop, ok := exec.TryStartRun()
 		assert.True(t, ok)
 		ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
@@ -528,7 +528,7 @@ func TestDurableHandle(t *testing.T) {
 		)
 
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, errHandle.Provide)
 
 		_, persist := errHandle.Use(b)
@@ -567,7 +567,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 			},
 		)
 
-		exec := execution.NewFlowExecution()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newDurableTestBuilder(t, exec, h.Provide)
 		ref, _ := h.Use(b)
 		usedPtr = ref
@@ -599,7 +599,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 			},
 		)
 
-		exec := execution.NewFlowExecution()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newDurableTestBuilder(t, exec, h.Provide)
 		err := flowhooks.RunOnExecutionEnd(b, nil)
 		assert.NoError(t, err)
@@ -625,7 +625,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 			},
 		)
 
-		exec := execution.NewFlowExecution()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newDurableTestBuilder(t, exec, h.Provide)
 		_, _ = h.Use(b)
 
@@ -662,7 +662,7 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 	t.Run("writes an unstored value into the given transaction", func(t *testing.T) {
 		h := newByteHandle("writeToHandle")
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, _ := h.Use(b)
@@ -692,7 +692,7 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		assert.NoError(t, err)
 
 		counting := &storeCountingContainer{inner: inner}
-		exec := execution.NewFlowExecutionWithContainer(counting)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(counting))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, _ := h.Use(b)
@@ -714,7 +714,7 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		h := newByteHandle("writeToSharedHandle")
 		inner := executiontype.NewInMemoryContainer()
 		counting := &storeCountingContainer{inner: inner}
-		exec := execution.NewFlowExecutionWithContainer(counting)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(counting))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, persist := h.Use(b)
@@ -746,7 +746,7 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		// failed or retried transaction does not make later writes think there is nothing to do.
 		h := newByteHandle("writeToUncommittedHandle")
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, _ := h.Use(b)
@@ -763,14 +763,14 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 	t.Run("survives the container retrying the transaction", func(t *testing.T) {
 		h := newByteHandle("writeToRetryingHandle")
 		c := executiontype.NewInMemoryContainer()
-		retrying := containertest.NewRetrying(c, 3)
-		exec := execution.NewFlowExecutionWithContainer(retrying)
+		strict := containertest.NewStrict(c)
+		exec := execution.NewFlowExecutionWithContainer(strict)
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, _ := h.Use(b)
 		*ref = byte(5)
 		var onCommit func()
-		err := retrying.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+		err := strict.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
 			onCommit = h.WriteTo(b, tx)
 			return nil
 		})
@@ -785,8 +785,8 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 	t.Run("persist survives the container retrying the transaction", func(t *testing.T) {
 		h := newByteHandle("persistRetryingHandle")
 		c := executiontype.NewInMemoryContainer()
-		retrying := containertest.NewRetrying(c, 3)
-		exec := execution.NewFlowExecutionWithContainer(retrying)
+		strict := containertest.NewStrict(c)
+		exec := execution.NewFlowExecutionWithContainer(strict)
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		ref, persist := h.Use(b)
@@ -803,7 +803,7 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		// there is nothing to compare or write.
 		h := newByteHandle("writeToUnusedHandle")
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
@@ -816,7 +816,7 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 	t.Run("panics if the handle was never provided", func(t *testing.T) {
 		h := newByteHandle("writeToUnprovidedHandle")
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec)
 
 		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
@@ -838,7 +838,7 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 			nil,
 		)
 		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(c)
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 		h.Use(b)
 

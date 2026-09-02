@@ -44,11 +44,13 @@ type FlowExecution struct {
 
 var ErrTransactionFailed = errors.New("transaction failed")
 
+// The execution's transactions record what has already happened,
+// so we shouldnt let the context cancel them, since the context can be cancelled by the user code arbitrarily.
 func (f *FlowExecution) mustTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	err := f.c.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error { fn(ctx, tx); return nil })
+	err := f.c.Transact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.Container) error { fn(ctx, tx); return nil })
 	if err != nil {
 		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
 	}
@@ -58,7 +60,7 @@ func (f *FlowExecution) mustReadTransact(ctx context.Context, fn func(ctx contex
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	err := f.c.ReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error { fn(ctx, tx); return nil })
+	err := f.c.ReadTransact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.ReadOnlyContainer) error { fn(ctx, tx); return nil })
 	if err != nil {
 		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
 	}
@@ -155,7 +157,7 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	var flags replay.Flags
 	var dirtyEpoch uint64
 	var onCommit []func()
-	err := f.c.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
+	err := f.c.Transact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.Container) error {
 		dirtyEpoch = f.getEpoch(tx, dirtyEpochKey)
 		onCommit = nil
 		if len(f.pendingInvalidation) > 0 {

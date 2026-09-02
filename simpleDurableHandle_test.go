@@ -5,6 +5,7 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -43,7 +44,7 @@ func TestNewPlainDurableHandle(t *testing.T) {
 
 		container := executiontype.NewInMemoryContainer()
 
-		r, err := futura.NewFlowFromContainer[struct{}, plainState](container).Execute(
+		r, err := futura.NewFlowFromContainer[struct{}, plainState](containertest.NewStrict(container)).Execute(
 			t.Context(),
 			flowFn,
 			struct{}{},
@@ -56,7 +57,7 @@ func TestNewPlainDurableHandle(t *testing.T) {
 		}, r)
 		assert.Equal(t, 1, constructorCalls)
 
-		r, err = futura.NewFlowFromContainer[struct{}, plainState](container).Execute(
+		r, err = futura.NewFlowFromContainer[struct{}, plainState](containertest.NewStrict(container)).Execute(
 			t.Context(),
 			flowFn,
 			struct{}{},

@@ -8,13 +8,14 @@ import (
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/step"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestState_InternalErrorPaths(t *testing.T) {
 	t.Run("panics when state is evaluated outside of a replay flow function", func(t *testing.T) {
-		exec := execution.NewFlowExecution()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		startExecRun(t, exec)
 		ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
 		b := stateContext.Provide(newFlowBuilder(ctx, exec))
@@ -25,7 +26,7 @@ func TestState_InternalErrorPaths(t *testing.T) {
 	})
 
 	t.Run("panics when state key is missing from the durable state map", func(t *testing.T) {
-		exec := execution.NewFlowExecution()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		startExecRun(t, exec)
 		ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
 		ctx, _ = exec.StartNewReplay(ctx)

@@ -9,6 +9,7 @@ import (
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/internal/flowhooks"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,7 +18,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 		callCount := 0
 		var gotErr error
 
-		r, err := futura.NewFlow[*any, string]().Execute(
+		r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(
 			t.Context(),
 			func(b futura.FlowBuilder, _ *any) (string, error) {
 				return "success", nil
@@ -39,7 +40,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 		callCount := 0
 		var gotErr error
 
-		r, err := futura.NewFlow[*any, string]().Execute(
+		r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(
 			t.Context(),
 			func(b futura.FlowBuilder, _ *any) (string, error) {
 				return "cancelled", ftype.ErrCancelFlow
@@ -64,7 +65,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 		})
 		t.Run("when the flow error is nil", func(t *testing.T) {
 			flowErr := errors.New("flow error")
-			r, err := futura.NewFlow[*any, string]().Execute(
+			r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(
 				t.Context(),
 				func(b futura.FlowBuilder, _ *any) (string, error) {
 					return "expected", fmt.Errorf("%w: %w", ftype.ErrCancelFlow, flowErr)
@@ -77,7 +78,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 			assert.Equal(t, "expected", r)
 		})
 		t.Run("when the flow error is not nil", func(t *testing.T) {
-			r, err := futura.NewFlow[*any, string]().Execute(
+			r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(
 				t.Context(),
 				func(b futura.FlowBuilder, _ *any) (string, error) {
 					return "expected", nil
@@ -101,7 +102,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 			return nil
 		}
 
-		_, err := futura.NewFlow[*any, string]().Execute(
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(
 			t.Context(),
 			func(b futura.FlowBuilder, _ *any) (string, error) {
 				return "success", nil

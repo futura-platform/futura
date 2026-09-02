@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -14,7 +15,7 @@ func TestStep(t *testing.T) {
 		replays := 0
 		var outputs []int
 		var executedWith []int
-		_, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			replays++
 			input := 1
 			if replays == 2 {
@@ -41,7 +42,7 @@ func TestStep(t *testing.T) {
 		// The input goes 1 -> 2 -> 2. The second replay with 2 must be a memo hit.
 		replays := 0
 		var executedWith []int
-		_, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			replays++
 			input := 1
 			if replays >= 2 {

@@ -13,6 +13,7 @@ import (
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/futura-platform/futura/moment"
 
@@ -28,7 +29,7 @@ var mockStableCallstack = []runtime.Frame{{
 // The run is automatically stopped at the end of the test.
 func runningFlowCtx(t *testing.T) context.Context {
 	t.Helper()
-	exec := execution.NewFlowExecution()
+	exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 	stop, ok := exec.TryStartRun()
 	if !ok {
 		t.Fatalf("flow execution is already running")

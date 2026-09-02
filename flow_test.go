@@ -13,13 +13,14 @@ import (
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestFlow(t *testing.T) {
 	t.Run("basic e2e test", func(t *testing.T) {
-		f := futura.NewFlow[*any, string]()
+		f := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory())
 		r, err := f.Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			return "result", nil
 		}, nil)
@@ -27,12 +28,12 @@ func TestFlow(t *testing.T) {
 		assert.Equal(t, "result", r)
 	})
 	t.Run("do not call Flow from within a flow", func(t *testing.T) {
-		outerExec := execution.NewFlowExecution()
+		outerExec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		stop, _ := outerExec.TryStartRun()
 		defer stop()
 		ctx := execution.WithFlow(t.Context(), outerExec)
-		f1 := futura.NewFlow[*any, string]()
-		f2 := futura.NewFlow[*any, string]()
+		f1 := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory())
+		f2 := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory())
 		_, err := f1.Execute(ctx, func(b futura.FlowBuilder, _ *any) (string, error) {
 			f2.Execute(ctx, func(b futura.FlowBuilder, _ *any) (string, error) {
 				return "never reached 1", nil
@@ -49,7 +50,7 @@ func TestFlow(t *testing.T) {
 			<-goroutine2Finished
 			return "result", nil
 		}
-		f := futura.NewFlow[*any, string]()
+		f := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory())
 		go func() {
 			<-fnEntered
 			defer close(goroutine2Finished)
@@ -62,14 +63,14 @@ func TestFlow(t *testing.T) {
 	})
 	t.Run("Flow recovers from panics", func(t *testing.T) {
 		var expectedErr = errors.New("expected panic")
-		_, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic(expectedErr)
 		}, nil)
 		assert.ErrorIs(t, err, futura.ErrFlowPanic)
 		assert.ErrorIs(t, err, expectedErr)
 	})
 	t.Run("Flow recovers from panics with non-error values", func(t *testing.T) {
-		_, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic("not an error type")
 		}, nil)
 		assert.ErrorIs(t, err, futura.ErrFlowPanic)
@@ -84,7 +85,7 @@ func TestFlow(t *testing.T) {
 	}
 	checkMultipleMomentFunctions := func(t *testing.T, onUseFn1 func(futura.FlowBuilder) futura.FlowBuilder, onUseFn2 func(futura.FlowBuilder) futura.FlowBuilder) (string, error) {
 		replayCount := 0
-		r, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			var vfn futura.ComparableMomentFn[*any, string]
 			if replayCount == 0 {
 				vfn = fn1
@@ -113,7 +114,7 @@ func TestFlow(t *testing.T) {
 		assert.Equal(t, runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(), fnChange.NewMomentFnName)
 		// the identity's callpath spans from the flow fn's Step call up through futura's own
 		// Execute wrapper, so pin it by its user callsite rather than reconstructing every frame.
-		assert.Contains(t, fnChange.Identity.Callpath().V(), moment.Callsite{File: "github.com/futura-platform/futura_test/flow_test.go", Line: 101})
+		assert.Contains(t, fnChange.Identity.Callpath().V(), moment.Callsite{File: "github.com/futura-platform/futura_test/flow_test.go", Line: 102})
 	})
 	t.Run("A single keyed moment identity should be able to be used with multiple moment functions", func(t *testing.T) {
 		r, err := checkMultipleMomentFunctions(t, func(b futura.FlowBuilder) futura.FlowBuilder {
@@ -131,7 +132,7 @@ func TestFlow(t *testing.T) {
 			execCount++
 			return nil
 		}
-		_, err := futura.NewFlow[*any, string]().
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).
 			Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 				for i := range expectedExecCount {
 					b = b.WithKey(strconv.Itoa(i))
@@ -176,7 +177,7 @@ func TestFlow(t *testing.T) {
 		container := executiontype.NewInMemoryContainer()
 
 		// perform the first execution
-		f1 := futura.NewFlowFromContainer[*any, string](container)
+		f1 := futura.NewFlowFromContainer[*any, string](containertest.NewStrict(container))
 
 		firstExecutionContext, cancelFirstExecution := context.WithCancel(t.Context())
 		defer cancelFirstExecution()
@@ -192,7 +193,7 @@ func TestFlow(t *testing.T) {
 		assert.Equal(t, 0, step2Calls)
 
 		// simulate a context switch
-		f2 := futura.NewFlowFromContainer[*any, string](container)
+		f2 := futura.NewFlowFromContainer[*any, string](containertest.NewStrict(container))
 
 		// resume the execution
 		_, err = f2.Execute(t.Context(), flowFn, nil)

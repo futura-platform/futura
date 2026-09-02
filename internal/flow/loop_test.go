@@ -14,6 +14,7 @@ import (
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/step"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
@@ -38,7 +39,7 @@ func loopAndAssertState[A, T any](t *testing.T, ctx context.Context, callableFlo
 
 func TestLoopFlow(t *testing.T) {
 	t.Run("Basic flow", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			return "test", nil
 		}, &struct{}{})
@@ -47,7 +48,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Flow cancellation", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		r, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			_, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
 				return "", ftype.ErrCancelFlow
@@ -62,7 +63,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Runs deferred functions when the flow succeeds", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		var calls []int
 
 		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
@@ -77,7 +78,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Runs deferred functions when the flow is cancelled", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		calls := 0
 
 		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
@@ -91,7 +92,7 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("Only runs deferred functions from the final replay", func(t *testing.T) {
 		replayErr := errors.New("retry")
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		replays := 0
 		calls := 0
 
@@ -114,7 +115,7 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("Regular error handling for evaluation failures (should retry)", func(t *testing.T) {
 		testErr := errors.New("test error")
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 
 		fnCallCount := 0
 		rval, err := loopAndAssertState(t,
@@ -137,7 +138,7 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("Regular error handling for non-evaluation failures (should not retry)", func(t *testing.T) {
 		testErr := errors.New("test error")
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		fnCallCount := 0
 		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			fnCallCount++
@@ -149,7 +150,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("Context error handling", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		ctx, cancel := context.WithCancel(ctx)
 		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			cancel()
@@ -160,7 +161,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("The loop should replay if the replay context was cancelled, even if the callable flow returns without an error", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		// Loop hasn't started the run yet; reach for the exec via the unsafe accessor.
 		f := execution.UnsafeFromContext(ctx)
 		replays := 0
@@ -177,7 +178,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("a replay terminated by a restart is restarted", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		f := execution.UnsafeFromContext(ctx)
 		replays := 0
 		afterStep := 0
@@ -201,7 +202,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("a replay terminated by outer cancellation returns the cancellation", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		ctx, cancel := context.WithCancel(ctx)
 		afterStep := 0
 		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
@@ -219,7 +220,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("any other panic from the flow is not recovered by the loop", func(t *testing.T) {
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		expected := errors.New("user panic")
 		assert.PanicsWithError(t, expected.Error(), func() {
 			loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
@@ -230,7 +231,7 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("step memos should be stable after a branch is closed and reopened", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(c))
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
 		replays := 0
 		stepCalls := 0
@@ -286,7 +287,7 @@ func TestLoopFlow(t *testing.T) {
 	t.Run("End to end flow with steps", func(t *testing.T) {
 		errCount := 0
 		expectedErr := errors.New("test error")
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 
 		fn1Calls := 0
 		failsTwice := moment.NewFn(func(ctx context.Context, _ *any) (string, error) {
@@ -330,7 +331,7 @@ func TestLoopFlow(t *testing.T) {
 		const collidingKey = "collidingKey"
 		wrapper1Value := "wrapper1"
 		wrapper2Value := "wrapper2"
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecution())
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			assert.Equal(t, wrapper2Value, ctx.Value(collidingKey))
 			return "test", nil
@@ -345,7 +346,7 @@ func TestLoopFlow(t *testing.T) {
 	})
 
 	t.Run("New branches can be taken if the dirty epoch is ahead of the evaluated epoch", func(t *testing.T) {
-		f := execution.NewFlowExecution()
+		f := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		ctx := execution.WithFlow(t.Context(), f)
 		replays := 0
 		newFirstCalls := 0
@@ -403,7 +404,7 @@ func TestLoopFlow(t *testing.T) {
 
 	t.Run("the call order is truncated to the final path on clean completion", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(c))
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 		f := execution.UnsafeFromContext(ctx)
 
 		evaluate := func(ctx context.Context, label string) error {
@@ -448,7 +449,7 @@ func TestLoopFlow(t *testing.T) {
 			c := executiontype.NewInMemoryContainer()
 			outerCtx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			ctx := execution.WithFlow(outerCtx, execution.NewFlowExecutionWithContainer(c))
+			ctx := execution.WithFlow(outerCtx, execution.NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 			f := execution.UnsafeFromContext(ctx)
 
 			replays := 0
@@ -470,7 +471,7 @@ func TestLoopFlow(t *testing.T) {
 			assert.Equal(t, 2, replays)
 
 			// resume over the same container, taking a different branch than was recorded.
-			resumedCtx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(c))
+			resumedCtx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 			rval, err := loopAndAssertState(t, resumedCtx, func(ctx context.Context, _ struct{}) (string, error) {
 				return step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
 					return "new branch", nil

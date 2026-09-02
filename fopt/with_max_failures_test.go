@@ -9,6 +9,7 @@ import (
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +26,7 @@ func TestWithMaxFailures(t *testing.T) {
 
 	t.Run("max failures undershot", func(t *testing.T) {
 		failsTwice := failsNTimesStep(2)
-		_, err := futura.NewFlow[any, any]().Execute(t.Context(), func(b futura.FlowBuilder, args any) (any, error) {
+		_, err := futura.NewFlowFromContainer[any, any](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, args any) (any, error) {
 			return futura.Step(b, failsTwice, nil)
 		}, nil, fopt.WithMaxFailures(2))
 		require.NoError(t, err)
@@ -33,7 +34,7 @@ func TestWithMaxFailures(t *testing.T) {
 
 	t.Run("max failures reached", func(t *testing.T) {
 		failsTwice := failsNTimesStep(2)
-		_, err := futura.NewFlow[any, any]().Execute(t.Context(), func(b futura.FlowBuilder, args any) (any, error) {
+		_, err := futura.NewFlowFromContainer[any, any](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, args any) (any, error) {
 			return futura.Step(b, failsTwice, nil)
 		}, nil, fopt.WithMaxFailures(1))
 		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
@@ -53,13 +54,13 @@ func TestWithMaxFailures(t *testing.T) {
 		}
 
 		// first execution (fails once, which should increment the failure count to 1, not triggering the max failures error yet)
-		f := futura.NewFlowFromContainer[any, any](container)
+		f := futura.NewFlowFromContainer[any, any](containertest.NewStrict(container))
 		firstExecCtx, firstExecCancel := context.WithCancel(t.Context())
 		_, err := exec2FailStepTest(firstExecCtx, f, firstExecCancel)
 		require.ErrorIs(t, err, firstExecCtx.Err())
 
 		// second execution (fails again once, which should trigger the max failures error)
-		f = futura.NewFlowFromContainer[any, any](container)
+		f = futura.NewFlowFromContainer[any, any](containertest.NewStrict(container))
 		_, err = exec2FailStepTest(t.Context(), f, func() {})
 		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
 	})
@@ -86,13 +87,13 @@ func TestWithMaxFailures(t *testing.T) {
 		for range 2 {
 			ctx, cancel := context.WithCancel(t.Context())
 			cancelDuringStep = cancel
-			_, err := futura.NewFlowFromContainer[any, any](container).Execute(ctx, flowFn, nil, fopt.WithMaxFailures(2))
+			_, err := futura.NewFlowFromContainer[any, any](containertest.NewStrict(container)).Execute(ctx, flowFn, nil, fopt.WithMaxFailures(2))
 			require.ErrorIs(t, err, context.Canceled)
 		}
 
 		// a healthy execution with one real failure must still be within budget
 		cancelDuringStep = nil
-		_, err := futura.NewFlowFromContainer[any, any](container).Execute(t.Context(), flowFn, nil, fopt.WithMaxFailures(2))
+		_, err := futura.NewFlowFromContainer[any, any](containertest.NewStrict(container)).Execute(t.Context(), flowFn, nil, fopt.WithMaxFailures(2))
 		require.NoError(t, err)
 	})
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/fopt"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,7 +18,7 @@ func TestWithLogger(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		}))
-		r, err := futura.NewFlow[*any, string]().Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+		r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			err := futura.Effect(b, func(ctx context.Context, args *any) error { return nil }, nil)
 			if err != nil {
 				return "failed", err

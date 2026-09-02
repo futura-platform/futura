@@ -10,6 +10,7 @@ import (
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/internal/goroutinebind"
 	"github.com/futura-platform/futura/internal/step"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/petermattis/goid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,7 @@ func TestBindToGoroutine(t *testing.T) {
 		assert.Panics(t, func() {
 			futura.BindToGoroutine(context.Background())
 		})
-		_, err := futura.NewFlow[struct{}, string]().Execute(t.Context(),
+		_, err := futura.NewFlowFromContainer[struct{}, string](containertest.NewInMemory()).Execute(t.Context(),
 			func(b futura.FlowBuilder, _ struct{}) (string, error) {
 				_, cancel := futura.BindToGoroutine(context.Background())
 				defer cancel()
@@ -29,7 +30,7 @@ func TestBindToGoroutine(t *testing.T) {
 		assert.ErrorIs(t, err, futura.ErrFlowPanic)
 	})
 	t.Run("BindToGoroutine passes AssertBoundGoroutine", func(t *testing.T) {
-		_, err := futura.NewFlow[struct{}, string]().Execute(t.Context(),
+		_, err := futura.NewFlowFromContainer[struct{}, string](containertest.NewInMemory()).Execute(t.Context(),
 			func(b futura.FlowBuilder, _ struct{}) (string, error) {
 				return "", futura.Action(b, func(ctx context.Context) error {
 					_, cancel := futura.BindToGoroutine(ctx)
@@ -45,7 +46,7 @@ func TestBindToGoroutine(t *testing.T) {
 		var assertBoundErr error
 		var spawnedRoutineID, observedRoutineID int64
 
-		result, err := futura.NewFlow[struct{}, string]().Execute(t.Context(),
+		result, err := futura.NewFlowFromContainer[struct{}, string](containertest.NewInMemory()).Execute(t.Context(),
 			func(b futura.FlowBuilder, _ struct{}) (string, error) {
 				return futura.Source(b, func(ctx context.Context) (string, error) {
 					var wg sync.WaitGroup
@@ -79,7 +80,7 @@ func TestBindToGoroutine(t *testing.T) {
 
 		goroutineStarted := make(chan struct{})
 
-		_, err := futura.NewFlow[struct{}, string]().Execute(t.Context(),
+		_, err := futura.NewFlowFromContainer[struct{}, string](containertest.NewInMemory()).Execute(t.Context(),
 			func(b futura.FlowBuilder, _ struct{}) (string, error) {
 				return futura.Source(b, func(ctx context.Context) (string, error) {
 					go func() {
@@ -100,7 +101,7 @@ func TestBindToGoroutine(t *testing.T) {
 	})
 
 	t.Run("calling BindToGoroutine twice from the same goroutine panics", func(t *testing.T) {
-		_, err := futura.NewFlow[struct{}, struct{}]().Execute(t.Context(),
+		_, err := futura.NewFlowFromContainer[struct{}, struct{}](containertest.NewInMemory()).Execute(t.Context(),
 			func(b futura.FlowBuilder, _ struct{}) (struct{}, error) {
 				_, err := futura.Source(b, func(ctx context.Context) (struct{}, error) {
 					_, cancel := futura.BindToGoroutine(ctx)
@@ -120,7 +121,7 @@ func TestBindToGoroutine(t *testing.T) {
 		const n = 10
 		var counter atomic.Int64
 
-		result, err := futura.NewFlow[struct{}, int]().Execute(t.Context(),
+		result, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(),
 			func(b futura.FlowBuilder, _ struct{}) (int, error) {
 				return futura.Source(b, func(ctx context.Context) (int, error) {
 					var wg sync.WaitGroup
@@ -145,7 +146,7 @@ func TestBindToGoroutine(t *testing.T) {
 		// synchronously after the step's main fn returns. Once the goroutine
 		// has bound, even a brief outstanding sleep causes the check to fail.
 		bound := make(chan struct{})
-		_, err := futura.NewFlow[struct{}, string]().Execute(t.Context(),
+		_, err := futura.NewFlowFromContainer[struct{}, string](containertest.NewInMemory()).Execute(t.Context(),
 			func(b futura.FlowBuilder, _ struct{}) (string, error) {
 				return futura.Source(b, func(ctx context.Context) (string, error) {
 					go func() {
@@ -167,7 +168,7 @@ func TestBindToGoroutine(t *testing.T) {
 	t.Run("the same goroutine can be bound again after cancel", func(t *testing.T) {
 		// Cancel removes the goroutine id from the active set, so a subsequent
 		// bind from the same goroutine should succeed without panicking.
-		result, err := futura.NewFlow[struct{}, string]().Execute(t.Context(),
+		result, err := futura.NewFlowFromContainer[struct{}, string](containertest.NewInMemory()).Execute(t.Context(),
 			func(b futura.FlowBuilder, _ struct{}) (string, error) {
 				return futura.Source(b, func(ctx context.Context) (string, error) {
 					var wg sync.WaitGroup

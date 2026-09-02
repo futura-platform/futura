@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRetrying(t *testing.T) {
+func TestStrict(t *testing.T) {
 	t.Run("only the last attempt is committed", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		r := NewRetrying(c, 3)
+		r := NewStrict(c)
 
 		attempt := 0
 		err := r.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
@@ -21,7 +21,7 @@ func TestRetrying(t *testing.T) {
 			return tx.StoreDurable("attempt", []byte{byte(attempt)})
 		})
 		assert.NoError(t, err)
-		assert.Equal(t, 3, r.Calls)
+		assert.Equal(t, Attempts, r.Calls)
 
 		value, ok, err := c.LoadDurable("attempt")
 		assert.NoError(t, err)
@@ -31,7 +31,7 @@ func TestRetrying(t *testing.T) {
 	t.Run("every attempt reads the committed state, and never another attempt's writes", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		assert.NoError(t, c.StoreDurable("committed", []byte{1}))
-		r := NewRetrying(c, 3)
+		r := NewStrict(c)
 
 		err := r.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
 			_, ok, err := tx.LoadDurable("committed")
@@ -47,7 +47,7 @@ func TestRetrying(t *testing.T) {
 	})
 	t.Run("the stale view is only shown to discarded attempts", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		r := NewRetrying(c, 3)
+		r := NewStrict(c)
 		r.StaleView = func(tx executiontype.Container) {
 			assert.NoError(t, tx.StoreDurable("stale", []byte{1}))
 		}
@@ -67,7 +67,7 @@ func TestRetrying(t *testing.T) {
 		committed := moment.NewIdentity(t.Context(), moment.Callpath{{File: "committed"}})
 		c.AppendCallOrder(committed)
 		c.SetMoment(committed, moment.Moment{})
-		r := NewRetrying(c, 3)
+		r := NewStrict(c)
 
 		err := r.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
 			assert.Equal(t, 1, tx.CallOrderLength(), "a previous attempt's append leaked into this one")
@@ -87,23 +87,32 @@ func TestRetrying(t *testing.T) {
 		assert.False(t, c.HasMoment(committed))
 	})
 	t.Run("read transactions are retried too", func(t *testing.T) {
-		r := NewRetrying(executiontype.NewInMemoryContainer(), 3)
+		r := NewStrict(executiontype.NewInMemoryContainer())
 		calls := 0
 		err := r.ReadTransact(t.Context(), func(context.Context, executiontype.ReadOnlyContainer) error {
 			calls++
 			return nil
 		})
 		assert.NoError(t, err)
-		assert.Equal(t, 3, calls)
+		assert.Equal(t, Attempts, calls)
 	})
-	t.Run("a single attempt is a plain transaction", func(t *testing.T) {
-		r := NewRetrying(executiontype.NewInMemoryContainer(), 1)
+	t.Run("a transaction on a done context is refused without running", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		r := NewStrict(executiontype.NewInMemoryContainer())
+
 		calls := 0
-		err := r.Transact(t.Context(), func(context.Context, executiontype.Container) error {
+		err := r.Transact(ctx, func(context.Context, executiontype.Container) error {
 			calls++
 			return nil
 		})
-		assert.NoError(t, err)
-		assert.Equal(t, 1, calls)
+		assert.ErrorIs(t, err, context.Canceled)
+		err = r.ReadTransact(ctx, func(context.Context, executiontype.ReadOnlyContainer) error {
+			calls++
+			return nil
+		})
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, 0, calls)
+		assert.Equal(t, 0, r.Calls)
 	})
 }

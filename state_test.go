@@ -39,13 +39,13 @@ func (c *crashingContainer) StoreDurable(key string, value []byte) error {
 // Any other outcome is a test failure, since the crash is the only way the execution is expected to end.
 func executeUntilCrash(t *testing.T, c *crashingContainer, flowFn futura.FlowFn[struct{}, int]) {
 	t.Helper()
-	_, err := futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+	_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
 	assert.ErrorIs(t, err, errSimulatedCrash)
 }
 
 func TestState(t *testing.T) {
 	t.Run("no initial value implies the default to be the type's zero value", func(t *testing.T) {
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State[int](b)
 			return state.V(), nil
 		}, struct{}{})
@@ -53,7 +53,7 @@ func TestState(t *testing.T) {
 		assert.Equal(t, 0, r)
 	})
 	t.Run("an initial value can be provided", func(t *testing.T) {
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 1)
 			return state.V(), nil
 		}, struct{}{})
@@ -67,7 +67,7 @@ func TestState(t *testing.T) {
 	})
 	t.Run("setState does not trigger a replay if the new value is the same as the current value", func(t *testing.T) {
 		replays := 0
-		futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			replays++
 			state := futura.State(b, 1)
 			state.Set(1)
@@ -76,7 +76,7 @@ func TestState(t *testing.T) {
 		assert.Equal(t, 1, replays)
 	})
 	t.Run("setState updates the state and immediately triggers a replay for a new value", func(t *testing.T) {
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 1)
 			state.Set(2)
 			return state.V(), nil
@@ -88,7 +88,7 @@ func TestState(t *testing.T) {
 		replays := 0
 		unseenAtStateEvals := 0
 		eventOrder := []string{}
-		futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			replays++
 			state := futura.State(b, false)
 			if replays == 2 {
@@ -125,13 +125,13 @@ func TestState(t *testing.T) {
 
 		originalContainer := executiontype.NewInMemoryContainer()
 
-		r, err := futura.NewFlowFromContainer[struct{}, int](originalContainer).Execute(t.Context(), flowFn, struct{}{})
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(originalContainer)).Execute(t.Context(), flowFn, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 2, r)
 
 		// Simulate handing execution state to another machine/process by creating
 		// a new flow instance over the persisted execution container.
-		r, err = futura.NewFlowFromContainer[struct{}, int](originalContainer).Execute(t.Context(), flowFn, struct{}{})
+		r, err = futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(originalContainer)).Execute(t.Context(), flowFn, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 2, r)
 	})
@@ -155,17 +155,17 @@ func TestState(t *testing.T) {
 		originalContainer := executiontype.NewInMemoryContainer()
 
 		ctx, cancel := context.WithCancel(t.Context())
-		_, err := futura.NewFlowFromContainer[struct{}, int](originalContainer).Execute(ctx, flowFn(cancel), struct{}{})
+		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(originalContainer)).Execute(ctx, flowFn(cancel), struct{}{})
 		assert.ErrorIs(t, err, context.Canceled)
 
 		// move the flow into a new execution context
-		r, err := futura.NewFlowFromContainer[struct{}, int](originalContainer).Execute(t.Context(), flowFn(func() {}), struct{}{})
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(originalContainer)).Execute(t.Context(), flowFn(func() {}), struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
 	})
 	t.Run("a new branch whose first step fails can be retried after the relaxed replay settles", func(t *testing.T) {
 		newBranchCalls := 0
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, false)
 			if !state.V() {
 				// The old branch must be longer than the point where the new branch
@@ -209,7 +209,7 @@ func TestState(t *testing.T) {
 			}
 			return fn2Calls, nil
 		}
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 0)
 
 			var r1, r2 int
@@ -235,7 +235,7 @@ func TestState(t *testing.T) {
 	t.Run("the context can be cancelled before a states initial value is seeded", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		reachedAfterSeed := false
-		r, err := futura.NewFlow[struct{}, int]().Execute(ctx, func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(ctx, func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			cancel()
 			state := futura.State(b, 1) // the seed is a step: the cancelled replay terminates here
 			reachedAfterSeed = true
@@ -247,7 +247,7 @@ func TestState(t *testing.T) {
 		assert.Equal(t, 0, r)
 	})
 	t.Run("setState is callable from any goroutine", func(t *testing.T) {
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 1)
 			var wg sync.WaitGroup
 			wg.Go(func() {
@@ -271,7 +271,7 @@ func TestState(t *testing.T) {
 			assert.Equal(t, 0, s2.V())
 			return s1.V() + s2.V(), nil
 		}
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			return middleFn(b)
 		}, struct{}{})
 		assert.NoError(t, err)
@@ -291,7 +291,7 @@ func TestState(t *testing.T) {
 
 		writes := func() int {
 			c := &crashingContainer{InMemoryContainer: executiontype.NewInMemoryContainer()}
-			futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+			futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
 			return c.writes
 		}()
 
@@ -301,7 +301,7 @@ func TestState(t *testing.T) {
 				executeUntilCrash(t, c, flowFn)
 
 				c.crashAt = 0
-				r, err := futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+				r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
 				assert.NoError(t, err)
 				assert.Equal(t, 1, r)
 			})
@@ -311,7 +311,7 @@ func TestState(t *testing.T) {
 		// Every State in a flow shares one value map, so a Set from a goroutine must not
 		// race a V() of a different State on the main goroutine, nor the loop's marshal
 		// of the map when it commits. Run under -race.
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			a := futura.State(b, 0)
 			c := futura.State(b, 0)
 			if a.V() > 0 {
@@ -332,7 +332,7 @@ func TestState(t *testing.T) {
 	})
 	t.Run("a state change ends the replay at the next step, so nothing after it can act on the dead replay", func(t *testing.T) {
 		t.Run("a state declared after the change cannot leak an unseeded value into another state", func(t *testing.T) {
-			r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 				trigger := futura.State(b, false)
 				total := futura.State(b, -1)
 				if !trigger.V() {
@@ -348,7 +348,7 @@ func TestState(t *testing.T) {
 			assert.Equal(t, -1, r)
 		})
 		t.Run("a step after the change cannot be observed as a failure", func(t *testing.T) {
-			r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 				ready := futura.State(b, false)
 				failures := futura.State(b, 0)
 				if !ready.V() {
@@ -365,7 +365,7 @@ func TestState(t *testing.T) {
 			assert.Equal(t, 0, r)
 		})
 		t.Run("pure code after the change still runs, so consecutive state changes stay atomic", func(t *testing.T) {
-			r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 				open := futura.State(b, false)
 				generation := futura.State(b, 0)
 				if !open.V() {
@@ -386,7 +386,7 @@ func TestState(t *testing.T) {
 		// and take a new branch under strict checking.
 		var held futura.StateContainer[bool]
 		replays := 0
-		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			replays++
 			s := futura.State(b, false)
 			switch replays {
@@ -417,12 +417,12 @@ func TestState(t *testing.T) {
 		}
 
 		c := executiontype.NewInMemoryContainer()
-		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewRetrying(c, 3)).Execute(t.Context(), flowFn, struct{}{})
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
 
 		// a fresh process over the committed state must see the change
-		r, err = futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+		r, err = futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
 	})
@@ -433,7 +433,7 @@ func TestState(t *testing.T) {
 			held = s
 			return s.V(), nil
 		}
-		f := futura.NewFlow[struct{}, int]()
+		f := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory())
 		r, err := f.Execute(t.Context(), flowFn, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 0, r)

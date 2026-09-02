@@ -35,7 +35,7 @@ func running(t *testing.T, exec *FlowExecution) *FlowExecution {
 
 func TestFlowExecutionRunningLifecycle(t *testing.T) {
 	t.Run("Running reflects TryStartRun and stop", func(t *testing.T) {
-		exec := NewFlowExecution()
+		exec := NewFlowExecutionWithContainer(containertest.NewInMemory())
 		assert.False(t, exec.Running(), "fresh execution should not be running")
 
 		stop, ok := exec.TryStartRun()
@@ -47,7 +47,7 @@ func TestFlowExecutionRunningLifecycle(t *testing.T) {
 	})
 
 	t.Run("TryStartRun returns false while a run is in flight", func(t *testing.T) {
-		exec := NewFlowExecution()
+		exec := NewFlowExecutionWithContainer(containertest.NewInMemory())
 		stop, ok := exec.TryStartRun()
 		assert.True(t, ok)
 		t.Cleanup(stop)
@@ -58,7 +58,7 @@ func TestFlowExecutionRunningLifecycle(t *testing.T) {
 	})
 
 	t.Run("a stopped execution can be started again", func(t *testing.T) {
-		exec := NewFlowExecution()
+		exec := NewFlowExecutionWithContainer(containertest.NewInMemory())
 		stop, ok := exec.TryStartRun()
 		assert.True(t, ok)
 		stop()
@@ -69,7 +69,7 @@ func TestFlowExecutionRunningLifecycle(t *testing.T) {
 	})
 
 	t.Run("FromContext panics when the execution has not started", func(t *testing.T) {
-		exec := NewFlowExecution()
+		exec := NewFlowExecutionWithContainer(containertest.NewInMemory())
 		ctx := WithFlow(t.Context(), exec)
 		assert.PanicsWithError(t,
 			ftrerrors.InconsistentStateError(ErrFlowExecutionNotRunning).Error(),
@@ -78,7 +78,7 @@ func TestFlowExecutionRunningLifecycle(t *testing.T) {
 	})
 
 	t.Run("FromContext panics after stop fires", func(t *testing.T) {
-		exec := NewFlowExecution()
+		exec := NewFlowExecutionWithContainer(containertest.NewInMemory())
 		ctx := WithFlow(t.Context(), exec)
 		stop, ok := exec.TryStartRun()
 		assert.True(t, ok)
@@ -94,7 +94,7 @@ func TestFlowExecutionRunningLifecycle(t *testing.T) {
 	})
 
 	t.Run("UnsafeFromContext skips the running check", func(t *testing.T) {
-		exec := NewFlowExecution()
+		exec := NewFlowExecutionWithContainer(containertest.NewInMemory())
 		ctx := WithFlow(t.Context(), exec)
 		// Even though we never started a run, this must not panic.
 		assert.Same(t, exec, UnsafeFromContext(ctx))
@@ -104,7 +104,7 @@ func TestFlowExecutionRunningLifecycle(t *testing.T) {
 func TestWithFlow(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()
-		fOriginal := running(t, NewFlowExecution())
+		fOriginal := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		ctx = WithFlow(ctx, fOriginal)
 		f, ok := FromContext(ctx)
 		assert.True(t, ok)
@@ -126,7 +126,7 @@ func TestWithFlow(t *testing.T) {
 
 func TestGetFlowContext_WrongGoroutine(t *testing.T) {
 	ctx := t.Context()
-	ctx = WithFlow(ctx, running(t, NewFlowExecution()))
+	ctx = WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewInMemory())))
 	assert.NotPanics(t, func() { FromContext(ctx) })
 	boundGoroutineID := goid.Get()
 	t.Run("panics", func(t *testing.T) {
@@ -141,7 +141,7 @@ func TestGetFlowContext_WrongGoroutine(t *testing.T) {
 }
 
 func TestCancelCurrentReplay(t *testing.T) {
-	f := running(t, NewFlowExecution())
+	f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
 		f.RestartCurrentReplay(nil)
 	})
@@ -151,7 +151,7 @@ func TestExpectedIdentity(t *testing.T) {
 	t.Run("has expected call", func(t *testing.T) {
 		ctx := t.Context()
 		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		c.AppendCallOrder(moment.Identity{})
@@ -163,7 +163,7 @@ func TestExpectedIdentity(t *testing.T) {
 	t.Run("no expected call", func(t *testing.T) {
 		ctx := t.Context()
 		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		_, ok := f.ExpectedIdentity(ctx)
@@ -172,7 +172,7 @@ func TestExpectedIdentity(t *testing.T) {
 	t.Run("sequence index out of bounds", func(t *testing.T) {
 		ctx := t.Context()
 		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		c.AppendCallOrder(moment.Identity{})
@@ -198,7 +198,7 @@ var placeholderCallable = moment.NewFn[struct{}, struct{}](func(ctx context.Cont
 func TestGetMoment(t *testing.T) {
 	ctx := t.Context()
 	c := executiontype.NewInMemoryContainer()
-	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
+	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 	f := MustFromContext(ctx)
 	identity := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
 	m := moment.NewMoment(placeholderCallable, 1)
@@ -213,7 +213,7 @@ func TestGetMoment(t *testing.T) {
 
 func TestRestartCurrentReplay(t *testing.T) {
 	t.Run("cancels the current replay with the restart cause", func(t *testing.T) {
-		f := running(t, NewFlowExecution())
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 
 		cancelCause := errors.New("placeholder")
@@ -224,7 +224,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 		assert.ErrorIs(t, cause, cancelCause)
 	})
 	t.Run("cancels the replay that is current now, not one that was current when the caller started", func(t *testing.T) {
-		f := running(t, NewFlowExecution())
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		first, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 		replay.Cancel(first, nil)
 		second, _ := f.StartNewReplay(WithFlow(t.Context(), f))
@@ -234,11 +234,11 @@ func TestRestartCurrentReplay(t *testing.T) {
 		assert.NotErrorIs(t, context.Cause(first), ErrRestartReplay)
 	})
 	t.Run("is a no-op before any replay has started", func(t *testing.T) {
-		f := running(t, NewFlowExecution())
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		assert.NotPanics(t, func() { f.RestartCurrentReplay(errors.New("nothing to restart")) })
 	})
 	t.Run("is a no-op after the current replay has ended", func(t *testing.T) {
-		f := running(t, NewFlowExecution())
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 		replay.Cancel(replayCtx, nil)
 
@@ -247,7 +247,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 		assert.NotErrorIs(t, context.Cause(replayCtx), ErrRestartReplay)
 	})
 	t.Run("panics without a cause", func(t *testing.T) {
-		f := running(t, NewFlowExecution())
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
 			f.RestartCurrentReplay(nil)
 		})
@@ -257,7 +257,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 func TestStartNewReplay(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 		replayCtx, _ := f.StartNewReplay(ctx)
 		assert.True(t, replay.Has(replayCtx))
@@ -267,7 +267,7 @@ func TestStartNewReplay(t *testing.T) {
 func TestRecordCurrentMoment(t *testing.T) {
 	t.Run("fresh moment case", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
+		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
@@ -281,7 +281,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 	})
 	t.Run("existing moment case", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
+		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
@@ -300,8 +300,8 @@ func TestRecordCurrentMoment(t *testing.T) {
 	})
 	t.Run("survives the container retrying the transaction", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		retrying := containertest.NewRetrying(c, 3)
-		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(retrying))), DefaultReplayFlags)
+		strict := containertest.NewStrict(c)
+		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(strict))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
@@ -309,14 +309,14 @@ func TestRecordCurrentMoment(t *testing.T) {
 
 		f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
 
-		assert.Equal(t, 3, retrying.Calls, "the closure should have run once per attempt")
+		assert.Equal(t, containertest.Attempts, strict.Calls, "the closure should have run once per attempt")
 		assert.Equal(t, 1, c.CallOrderLength(), "recorded exactly once")
 		assert.True(t, c.HasMoment(recordKey))
 		assert.True(t, sequence.IsSeen(ctx, recordKey))
 	})
 	t.Run("with existing cached state case", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		ctx := WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(c)))
+		ctx := WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c))))
 		f := MustFromContext(ctx)
 
 		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
@@ -363,7 +363,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 	t.Run("sequence index out of bounds", func(t *testing.T) {
 		ctx := t.Context()
 		c := executiontype.NewInMemoryContainer()
-		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(c))), DefaultReplayFlags)
+		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
 		ctx = sequence.With(ctx, DefaultReplayFlags)
@@ -403,34 +403,32 @@ func TestInvalidateSequence(t *testing.T) {
 
 	t.Run("the mutation is applied immediately, but nothing is written until the next replay starts", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := running(t, NewFlowExecutionWithContainer(c))
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
-		applied, writes := false, 0
-		f.InvalidateSequence(func() { applied = true }, func(executiontype.Container) func() { writes++; return nil })
+		applied, committed := false, 0
+		f.InvalidateSequence(func() { applied = true }, func(executiontype.Container) func() { return func() { committed++ } })
 		assert.True(t, applied)
 		assert.Equal(t, uint64(0), getEpoch(t, c))
-		assert.Equal(t, 0, writes)
+		assert.Equal(t, 0, committed)
 
 		dirtyEpoch := startReplay(t, f)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
-		assert.Equal(t, 1, writes)
+		assert.Equal(t, 1, committed)
 		// the replay that committed the invalidation was started against the bumped epoch
 		assert.Equal(t, uint64(1), dirtyEpoch)
 	})
 	t.Run("every pending write is committed in one transaction with a single epoch bump", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := running(t, NewFlowExecutionWithContainer(c))
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
 		var order []string
 		f.InvalidateSequence(func() {}, func(tx executiontype.Container) func() {
-			order = append(order, "first")
 			assert.NoError(t, tx.StoreDurable("first", []byte{1}))
-			return nil
+			return func() { order = append(order, "first") }
 		})
 		f.InvalidateSequence(func() {}, func(tx executiontype.Container) func() {
-			order = append(order, "second")
 			assert.NoError(t, tx.StoreDurable("second", []byte{2}))
-			return nil
+			return func() { order = append(order, "second") }
 		})
 		startReplay(t, f)
 
@@ -444,7 +442,7 @@ func TestInvalidateSequence(t *testing.T) {
 	})
 	t.Run("a replay started with nothing pending does not bump the epoch", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := running(t, NewFlowExecutionWithContainer(c))
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
 		f.InvalidateSequence(func() {}, func(executiontype.Container) func() { return nil })
 		startReplay(t, f)
@@ -456,8 +454,8 @@ func TestInvalidateSequence(t *testing.T) {
 	})
 	t.Run("committing survives the container retrying the transaction", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		retrying := containertest.NewRetrying(c, 3)
-		f := running(t, NewFlowExecutionWithContainer(retrying))
+		strict := containertest.NewStrict(c)
+		f := running(t, NewFlowExecutionWithContainer(strict))
 
 		writes, committed := 0, 0
 		f.InvalidateSequence(func() {}, func(tx executiontype.Container) func() {
@@ -472,29 +470,29 @@ func TestInvalidateSequence(t *testing.T) {
 		})
 		dirtyEpoch := startReplay(t, f)
 
-		assert.Equal(t, 3, retrying.Calls, "the closure should have run once per attempt")
-		assert.Equal(t, 3, writes, "the write runs on every attempt, against a fresh transaction")
+		assert.Equal(t, containertest.Attempts, strict.Calls, "the closure should have run once per attempt")
+		assert.Equal(t, containertest.Attempts, writes, "the write runs on every attempt, against a fresh transaction")
 		assert.Equal(t, 1, committed, "but only the committing attempt's onCommit runs")
 		assert.Equal(t, uint64(1), getEpoch(t, c), "and the epoch is bumped exactly once")
 		assert.Equal(t, uint64(1), dirtyEpoch)
 	})
 	t.Run("the replay's flags come from the attempt that committed, not an earlier one", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		retrying := containertest.NewRetrying(c, 2)
-		retrying.StaleView = func(tx executiontype.Container) {
+		strict := containertest.NewStrict(c)
+		strict.StaleView = func(tx executiontype.Container) {
 			// the discarded attempt sees an epoch that would relax the replay
 			encoded, err := binary.Append(nil, binary.LittleEndian, uint64(5))
 			assert.NoError(t, err)
 			assert.NoError(t, tx.StoreDurable(dirtyEpochKey, encoded))
 		}
-		f := running(t, NewFlowExecutionWithContainer(retrying))
+		f := running(t, NewFlowExecutionWithContainer(strict))
 
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 		assert.True(t, sequence.GetFlags(replayCtx).PanicOnMomentOrderChange)
 	})
 	t.Run("a replay cannot start between a mutation being applied and its invalidation being recorded", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := running(t, NewFlowExecutionWithContainer(c))
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
 		applied := make(chan struct{})
 		release := make(chan struct{})
@@ -527,7 +525,7 @@ func TestInvalidateSequence(t *testing.T) {
 	})
 	t.Run("an invalidation recorded between runs is committed by the next run's first replay", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := NewFlowExecutionWithContainer(c)
+		f := NewFlowExecutionWithContainer(containertest.NewStrict(c))
 
 		stop, ok := f.TryStartRun()
 		assert.True(t, ok)
@@ -550,12 +548,12 @@ func TestSettleSequence(t *testing.T) {
 		for range 3 {
 			c.AppendCallOrder(moment.Identity{})
 		}
-		retrying := containertest.NewRetrying(c, 3)
-		f := NewFlowExecutionWithContainer(retrying)
+		strict := containertest.NewStrict(c)
+		f := NewFlowExecutionWithContainer(strict)
 
 		f.SettleSequence(t.Context(), 1, 4)
 
-		assert.Equal(t, 3, retrying.Calls, "the closure should have run once per attempt")
+		assert.Equal(t, containertest.Attempts, strict.Calls, "the closure should have run once per attempt")
 		assert.Equal(t, 2, c.CallOrderLength(), "truncated to the recorded index exactly once")
 		encoded, ok, err := c.LoadDurable(evaluatedEpochKey)
 		assert.NoError(t, err)
@@ -567,7 +565,7 @@ func TestSettleSequence(t *testing.T) {
 	})
 	t.Run("panics if the evaluated epoch would move backwards", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := NewFlowExecutionWithContainer(c)
+		f := NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		ctx := t.Context()
 
 		f.SettleSequence(ctx, -1, 2)
@@ -577,7 +575,7 @@ func TestSettleSequence(t *testing.T) {
 	})
 	t.Run("panics if the call order does not end where the replay stopped", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := NewFlowExecutionWithContainer(c)
+		f := NewFlowExecutionWithContainer(containertest.NewStrict(c))
 
 		// the record is empty, but the replay claims to have recorded an entry
 		testutil.PanicsWithErrorIs(t, ErrSettledSequenceMismatch, func() {
@@ -588,7 +586,7 @@ func TestSettleSequence(t *testing.T) {
 
 func TestDurable(t *testing.T) {
 	c := executiontype.NewInMemoryContainer()
-	f := NewFlowExecutionWithContainer(c)
+	f := NewFlowExecutionWithContainer(containertest.NewStrict(c))
 	ctx := sequence.With(WithFlow(t.Context(), f), DefaultReplayFlags)
 	t.Run("returns !ok if the value is not found", func(t *testing.T) {
 		_, ok := f.LoadDurable(ctx, "notFound")
@@ -605,7 +603,7 @@ func TestDurable(t *testing.T) {
 
 func TestMustFromContext(t *testing.T) {
 	ctx := t.Context()
-	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
+	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))), DefaultReplayFlags)
 	f := MustFromContext(ctx)
 	assert.NotNil(t, f)
 
