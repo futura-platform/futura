@@ -131,6 +131,38 @@ func TestState(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
 	})
+	t.Run("a new branch whose first step fails can be retried after the relaxed replay settles", func(t *testing.T) {
+		newBranchCalls := 0
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			state := futura.State(b, false)
+			if !state.V() {
+				// The old branch must be longer than the point where the new branch
+				// fails, so that a stale call order entry is left behind.
+				if err := futura.Action(b, func(ctx context.Context) error { return nil }); err != nil {
+					return 0, err
+				}
+				if err := futura.Action(b, func(ctx context.Context) error { return nil }); err != nil {
+					return 0, err
+				}
+				state.Set(true)
+				return 0, nil
+			}
+			err := futura.Action(b, func(ctx context.Context) error {
+				newBranchCalls++
+				if newBranchCalls == 1 {
+					return errors.New("transient failure on the first attempt of the new branch")
+				}
+				return nil
+			})
+			if err != nil {
+				return 0, err
+			}
+			return 1, futura.Action(b, func(ctx context.Context) error { return nil })
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r)
+		assert.Equal(t, 2, newBranchCalls)
+	})
 	t.Run("state values can be used as branch conditions", func(t *testing.T) {
 		fn1Calls := 0
 		fn1 := func(_ context.Context, _ struct{}) (int, error) {
