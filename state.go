@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
@@ -35,20 +36,45 @@ func (s stateContainerImplementation[T]) Set(value T) {
 	s.setState(value)
 }
 
+// stateValues holds every State's encoded value for a flow. Set is callable from any goroutine and
+// the loop marshals the map when it commits, so all access goes through the mutex.
+type stateValues struct {
+	mu     sync.RWMutex
+	values map[string][]byte
+}
+
+func (s *stateValues) get(key string) ([]byte, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.values[key]
+	return value, ok
+}
+
+func (s *stateValues) set(key string, value []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.values[key] = value
+}
+
 var stateContext = NewDurableHandle(
 	"state",
-	func() *map[string][]byte {
-		return &map[string][]byte{}
+	func() *stateValues {
+		return &stateValues{values: map[string][]byte{}}
 	},
-	func(data []byte) (*map[string][]byte, error) {
+	func(data []byte) (*stateValues, error) {
 		decoder := privateencoding.NewDecoder[map[string][]byte](bytes.NewReader(data))
-		state, err := decoder.Decode()
-		return &state, err
+		values, err := decoder.Decode()
+		if err != nil {
+			return nil, err
+		}
+		return &stateValues{values: values}, nil
 	},
-	func(data *map[string][]byte) ([]byte, error) {
+	func(s *stateValues) ([]byte, error) {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
 		var buffer bytes.Buffer
 		encoder := privateencoding.NewEncoder[map[string][]byte](&buffer)
-		if err := encoder.Encode(*data); err != nil {
+		if err := encoder.Encode(s.values); err != nil {
 			return nil, err
 		}
 		return buffer.Bytes(), nil
@@ -62,7 +88,7 @@ var (
 
 func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateContainer[T] {
 	f := execution.MustFromContext(b)
-	stateRef, persist := stateContext.Use(b)
+	values, persist := stateContext.Use(b)
 
 	encode := func(value T) ([]byte, error) {
 		var buffer bytes.Buffer
@@ -75,7 +101,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 	}
 
 	stage := func(stateKey string, value []byte) {
-		(*stateRef)[stateKey] = value
+		values.set(stateKey, value)
 	}
 
 	stateKey, err := Step(b, func(ctx context.Context, initialValue T) (string, error) {
@@ -105,7 +131,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 
 	return stateContainerImplementation[T]{
 		getValue: func() T {
-			data, ok := (*stateRef)[stateKey]
+			data, ok := values.get(stateKey)
 			if !ok {
 				panic(ftrerrors.InconsistentStateError(fmt.Errorf("%w: %s", ErrStateNotFound, stateKey)))
 			}
@@ -122,7 +148,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 			if err != nil {
 				panic(err)
 			}
-			if bytes.Equal((*stateRef)[stateKey], encoded) {
+			if current, _ := values.get(stateKey); bytes.Equal(current, encoded) {
 				return
 			}
 

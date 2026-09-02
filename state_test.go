@@ -303,4 +303,27 @@ func TestState(t *testing.T) {
 			})
 		}
 	})
+	t.Run("states can be read and set concurrently from different goroutines", func(t *testing.T) {
+		// Every State in a flow shares one value map, so a Set from a goroutine must not
+		// race a V() of a different State on the main goroutine, nor the loop's marshal
+		// of the map when it commits. Run under -race.
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			a := futura.State(b, 0)
+			c := futura.State(b, 0)
+			if a.V() > 0 {
+				return a.V() + c.V(), nil
+			}
+			return 0, futura.Action(b, func(ctx context.Context) error {
+				var wg sync.WaitGroup
+				wg.Go(func() { a.Set(1) })
+				for range 1000 {
+					_ = c.V()
+				}
+				wg.Wait()
+				return nil
+			})
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r)
+	})
 }

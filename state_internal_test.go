@@ -35,8 +35,10 @@ func TestState_InternalErrorPaths(t *testing.T) {
 			state := stateWithInitialValue(b, 1)
 
 			// Force an inconsistent durable map to exercise the ErrStateNotFound panic path.
-			stateRef, _ := stateContext.Use(b)
-			*stateRef = map[string][]byte{}
+			values, _ := stateContext.Use(b)
+			values.mu.Lock()
+			values.values = map[string][]byte{}
+			values.mu.Unlock()
 
 			testutil.PanicsWithErrorIs(t, ErrStateNotFound, func() {
 				_ = state.V()
