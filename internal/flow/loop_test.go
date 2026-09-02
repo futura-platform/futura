@@ -344,4 +344,61 @@ func TestLoopFlow(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "success on replay 4", rval)
 	})
+
+	t.Run("terminal exits do not settle the sequence", func(t *testing.T) {
+		assertDoesNotSettle := func(t *testing.T, expectedErr error, exit func(ctx context.Context, cancel context.CancelFunc) error) {
+			t.Helper()
+
+			c := executiontype.NewInMemoryContainer()
+			outerCtx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx := execution.WithFlow(outerCtx, execution.NewFlowExecutionWithContainer(c))
+			f := execution.UnsafeFromContext(ctx)
+
+			replays := 0
+			_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ struct{}) (string, error) {
+				replays++
+				if _, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+					return "success", nil
+				}, ftype.WithLabel("first call")), struct{}{}); err != nil {
+					return "", err
+				}
+				if replays == 1 {
+					f.InvalidateSequence(ctx)
+					f.RestartCurrentReplay(ctx, errors.New("state change"))
+					return "", nil
+				}
+				return "", exit(ctx, cancel)
+			}, struct{}{})
+			assert.ErrorIs(t, err, expectedErr)
+			assert.Equal(t, 2, replays)
+
+			// resume over the same container, taking a different branch than was recorded.
+			resumedCtx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(c))
+			rval, err := loopAndAssertState(t, resumedCtx, func(ctx context.Context, _ struct{}) (string, error) {
+				return step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+					return "new branch", nil
+				}, ftype.WithLabel("new branch call")), struct{}{})
+			}, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, "new branch", rval)
+		}
+
+		t.Run("cancel flow error", func(t *testing.T) {
+			assertDoesNotSettle(t, ftype.ErrCancelFlow, func(context.Context, context.CancelFunc) error {
+				return ftype.ErrCancelFlow
+			})
+		})
+		t.Run("non-evaluation error", func(t *testing.T) {
+			assertDoesNotSettle(t, flow.ErrOccurredOutsideOfEvaluation, func(context.Context, context.CancelFunc) error {
+				return errors.New("outside of a step")
+			})
+		})
+		t.Run("outer context cancellation", func(t *testing.T) {
+			assertDoesNotSettle(t, context.Canceled, func(_ context.Context, cancel context.CancelFunc) error {
+				cancel()
+				return errors.New("cancelled by the outer context")
+			})
+		})
+	})
 }
