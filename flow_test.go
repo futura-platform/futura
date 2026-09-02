@@ -194,7 +194,6 @@ func TestFlow(t *testing.T) {
 
 		// simulate a context switch
 		f2 := futura.NewFlowFromContainer[*any, string](container)
-		assert.Equal(t, f1, f2)
 
 		// resume the execution
 		_, err = f2.Execute(t.Context(), flowFn, nil)

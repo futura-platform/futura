@@ -4,9 +4,9 @@ import "context"
 
 const cancelReplayKey = "cancel_replay"
 
-func With(ctx context.Context) context.Context {
+func With(ctx context.Context) (context.Context, context.CancelCauseFunc) {
 	ctx, cancel := context.WithCancelCause(ctx)
-	return context.WithValue(ctx, cancelReplayKey, cancel)
+	return context.WithValue(ctx, cancelReplayKey, cancel), cancel
 }
 
 func Has(ctx context.Context) bool {

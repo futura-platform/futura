@@ -139,16 +139,9 @@ func TestGetFlowContext_WrongGoroutine(t *testing.T) {
 }
 
 func TestCancelCurrentReplay(t *testing.T) {
-	ctx := t.Context()
-	ctx = WithFlow(ctx, running(t, NewFlowExecution()))
-	f := MustFromContext(ctx)
-	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNoCurrentReplay).Error(), func() {
-		f.RestartCurrentReplay(ctx, errors.New("placeholder"))
-	})
-
-	ctx = replay.With(ctx)
+	f := running(t, NewFlowExecution())
 	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
-		f.RestartCurrentReplay(ctx, nil)
+		f.RestartCurrentReplay(nil)
 	})
 }
 
@@ -217,34 +210,44 @@ func TestGetMoment(t *testing.T) {
 }
 
 func TestRestartCurrentReplay(t *testing.T) {
-	t.Run("normal case", func(t *testing.T) {
-		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
-		f := MustFromContext(ctx)
+	t.Run("cancels the current replay with the restart cause", func(t *testing.T) {
+		f := running(t, NewFlowExecution())
+		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 
-		ctx = replay.With(ctx)
 		cancelCause := errors.New("placeholder")
-		f.RestartCurrentReplay(ctx, cancelCause)
+		f.RestartCurrentReplay(cancelCause)
 
-		cause := context.Cause(ctx)
+		cause := context.Cause(replayCtx)
 		assert.ErrorIs(t, cause, ErrRestartReplay)
 		assert.ErrorIs(t, cause, cancelCause)
 	})
-	t.Run("no cancel current replay case", func(t *testing.T) {
-		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
-		f := MustFromContext(ctx)
-		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNoCurrentReplay).Error(), func() {
-			f.RestartCurrentReplay(ctx, nil)
-		})
+	t.Run("cancels the replay that is current now, not one that was current when the caller started", func(t *testing.T) {
+		f := running(t, NewFlowExecution())
+		first, _ := f.StartNewReplay(WithFlow(t.Context(), f))
+		replay.Cancel(first, nil)
+		second, _ := f.StartNewReplay(WithFlow(t.Context(), f))
+
+		f.RestartCurrentReplay(errors.New("from a holder of the first replay"))
+		assert.ErrorIs(t, context.Cause(second), ErrRestartReplay)
+		assert.NotErrorIs(t, context.Cause(first), ErrRestartReplay)
 	})
-	t.Run("no cancel cause case", func(t *testing.T) {
-		ctx := t.Context()
-		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
-		f := MustFromContext(ctx)
-		ctx = replay.With(ctx)
+	t.Run("is a no-op before any replay has started", func(t *testing.T) {
+		f := running(t, NewFlowExecution())
+		assert.NotPanics(t, func() { f.RestartCurrentReplay(errors.New("nothing to restart")) })
+	})
+	t.Run("is a no-op after the current replay has ended", func(t *testing.T) {
+		f := running(t, NewFlowExecution())
+		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
+		replay.Cancel(replayCtx, nil)
+
+		f.RestartCurrentReplay(errors.New("after the replay ended"))
+		// cancellation is idempotent: the first cause stands
+		assert.NotErrorIs(t, context.Cause(replayCtx), ErrRestartReplay)
+	})
+	t.Run("panics without a cause", func(t *testing.T) {
+		f := running(t, NewFlowExecution())
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
-			f.RestartCurrentReplay(ctx, nil)
+			f.RestartCurrentReplay(nil)
 		})
 	})
 }
@@ -374,36 +377,42 @@ func TestInvalidateSequence(t *testing.T) {
 		assert.NoError(t, err)
 		return epoch
 	}
+	startReplay := func(t *testing.T, f *FlowExecution) (dirtyEpoch uint64) {
+		t.Helper()
+		_, dirtyEpoch = f.StartNewReplay(WithFlow(t.Context(), f))
+		return dirtyEpoch
+	}
 
-	t.Run("nothing is written until the invalidation is committed", func(t *testing.T) {
+	t.Run("the mutation is applied immediately, but nothing is written until the next replay starts", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := NewFlowExecutionWithContainer(c)
+		f := running(t, NewFlowExecutionWithContainer(c))
 
-		writes := 0
-		f.InvalidateSequence(func(executiontype.Container) { writes++ })
-		assert.True(t, f.HasPendingInvalidation())
+		applied, writes := false, 0
+		f.InvalidateSequence(func() { applied = true }, func(executiontype.Container) { writes++ })
+		assert.True(t, applied)
 		assert.Equal(t, uint64(0), getEpoch(t, c))
 		assert.Equal(t, 0, writes)
 
-		f.CommitInvalidation(t.Context())
-		assert.False(t, f.HasPendingInvalidation())
+		dirtyEpoch := startReplay(t, f)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
 		assert.Equal(t, 1, writes)
+		// the replay that committed the invalidation was started against the bumped epoch
+		assert.Equal(t, uint64(1), dirtyEpoch)
 	})
-	t.Run("every pending write is committed in the invalidation's transaction", func(t *testing.T) {
+	t.Run("every pending write is committed in one transaction with a single epoch bump", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		f := NewFlowExecutionWithContainer(c)
+		f := running(t, NewFlowExecutionWithContainer(c))
 
 		var order []string
-		f.InvalidateSequence(func(tx executiontype.Container) {
+		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
 			order = append(order, "first")
 			assert.NoError(t, tx.StoreDurable("first", []byte{1}))
 		})
-		f.InvalidateSequence(func(tx executiontype.Container) {
+		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
 			order = append(order, "second")
 			assert.NoError(t, tx.StoreDurable("second", []byte{2}))
 		})
-		f.CommitInvalidation(t.Context())
+		startReplay(t, f)
 
 		assert.Equal(t, []string{"first", "second"}, order)
 		for _, key := range []string{"first", "second"} {
@@ -411,21 +420,64 @@ func TestInvalidateSequence(t *testing.T) {
 			assert.NoError(t, err)
 			assert.True(t, ok, key)
 		}
-		// one bump for the batch, not one per write
 		assert.Equal(t, uint64(1), getEpoch(t, c))
 	})
-	t.Run("each commit bumps the epoch once and clears the pending writes", func(t *testing.T) {
+	t.Run("a replay started with nothing pending does not bump the epoch", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := running(t, NewFlowExecutionWithContainer(c))
+
+		f.InvalidateSequence(func() {}, func(executiontype.Container) {})
+		startReplay(t, f)
+		assert.Equal(t, uint64(1), getEpoch(t, c))
+
+		startReplay(t, f)
+		startReplay(t, f)
+		assert.Equal(t, uint64(1), getEpoch(t, c))
+	})
+	t.Run("committing survives the container retrying the transaction", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		retrying := &retryingContainer{InMemoryContainer: c, attempts: 2}
+		f := running(t, NewFlowExecutionWithContainer(retrying))
+
+		writes := 0
+		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
+			writes++
+			assert.NoError(t, tx.StoreDurable("value", []byte{1}))
+		})
+		dirtyEpoch := startReplay(t, f)
+
+		assert.Equal(t, 2, retrying.calls, "the closure should have run once per attempt")
+		assert.Equal(t, 2, writes, "the write runs on every attempt, against a fresh transaction")
+		assert.Equal(t, uint64(1), getEpoch(t, c), "but the epoch is bumped exactly once")
+		assert.Equal(t, uint64(1), dirtyEpoch)
+		_, ok, err := c.LoadDurable("value")
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	})
+	t.Run("the replay's flags come from the attempt that committed, not an earlier one", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		retrying := &retryingContainer{InMemoryContainer: c, attempts: 2, scratchDirtyEpoch: 5}
+		f := running(t, NewFlowExecutionWithContainer(retrying))
+
+		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
+		assert.True(t, sequence.GetFlags(replayCtx).PanicOnMomentOrderChange)
+	})
+	t.Run("an invalidation recorded between runs is committed by the next run's first replay", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := NewFlowExecutionWithContainer(c)
 
-		f.InvalidateSequence(func(executiontype.Container) {})
-		f.CommitInvalidation(t.Context())
-		assert.Equal(t, uint64(1), getEpoch(t, c))
+		stop, ok := f.TryStartRun()
+		assert.True(t, ok)
+		stop()
 
-		f.InvalidateSequence(func(executiontype.Container) {})
-		f.CommitInvalidation(t.Context())
-		assert.Equal(t, uint64(2), getEpoch(t, c))
-		assert.False(t, f.HasPendingInvalidation())
+		f.InvalidateSequence(func() {}, func(executiontype.Container) {})
+		assert.Equal(t, uint64(0), getEpoch(t, c))
+
+		stop, ok = f.TryStartRun()
+		assert.True(t, ok)
+		defer stop()
+		startReplay(t, f)
+		assert.Equal(t, uint64(1), getEpoch(t, c))
 	})
 }
 
@@ -485,4 +537,37 @@ func TestNewFlowExecutionFromState(t *testing.T) {
 	f := NewFlowExecutionWithContainer(c)
 	assert.NotNil(t, f)
 	assert.Equal(t, c, f.c)
+}
+
+// retryingContainer runs every transaction closure attempts times, discarding all but the last
+// attempt's writes, the way a transactional backend does when it retries on conflict.
+type retryingContainer struct {
+	*executiontype.InMemoryContainer
+	attempts int
+	calls    int
+	// scratchDirtyEpoch, if set, is the dirty epoch the discarded attempts see instead of the
+	// real one, so a test can make an earlier attempt reach a different decision.
+	scratchDirtyEpoch uint64
+}
+
+func (r *retryingContainer) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
+	for i := 1; i < r.attempts; i++ {
+		r.calls++
+		scratch := executiontype.NewInMemoryContainer()
+		// seed the scratch tx with the current durable state so reads behave like the real attempt
+		for _, key := range []string{dirtyEpochKey, evaluatedEpochKey} {
+			if v, ok, _ := r.InMemoryContainer.LoadDurable(key); ok {
+				scratch.StoreDurable(key, v)
+			}
+		}
+		if r.scratchDirtyEpoch != 0 {
+			encoded, _ := binary.Append(nil, binary.LittleEndian, r.scratchDirtyEpoch)
+			scratch.StoreDurable(dirtyEpochKey, encoded)
+		}
+		if err := fn(ctx, scratch); err != nil {
+			return err
+		}
+	}
+	r.calls++
+	return r.InMemoryContainer.Transact(ctx, fn)
 }

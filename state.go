@@ -12,7 +12,6 @@ import (
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/goroutinebind"
 	"github.com/futura-platform/futura/moment"
 	"github.com/futura-platform/futura/privateencoding"
 )
@@ -142,16 +141,13 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 				return
 			}
 
-			b = b.WithContext(
-				// setState is callable anywhere, so we need to temporarily bind to the current goroutine to allow the replay to restart.
-				goroutinebind.BindGoroutine(b),
-			)
-
 			// The new value is only staged in memory here. It is committed durably, together with the
-			// sequence invalidation, when the loop handles the restart. This allows for multiple state changes to happen atomically, ensuring durability.
-			stage(stateKey, encoded)
-			f.InvalidateSequence(func(tx executiontype.Container) { stateContext.WriteTo(b, tx) })
-			f.RestartCurrentReplay(b, errors.New("state updated by setState"))
+			// sequence invalidation, when the next replay starts. This allows for multiple state changes to happen atomically, ensuring durability.
+			f.InvalidateSequence(
+				func() { stage(stateKey, encoded) },
+				func(tx executiontype.Container) { stateContext.WriteTo(b, tx) },
+			)
+			f.RestartCurrentReplay(errors.New("state updated by setState"))
 		},
 	}
 }

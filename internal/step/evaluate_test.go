@@ -256,7 +256,7 @@ func TestStep(t *testing.T) {
 		terminatedWith := replayTerminatedWith(t, runningFlowCtx(t), func(ctx context.Context) {
 			f := execution.MustFromContext(ctx)
 			ctx, _ = f.StartNewReplay(ctx)
-			f.RestartCurrentReplay(ctx, errors.New("restarted"))
+			f.RestartCurrentReplay(errors.New("restarted"))
 			defer func() { indexAfter = sequence.GetIndex(ctx) }()
 
 			Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
@@ -275,7 +275,7 @@ func TestStep(t *testing.T) {
 			ctx, _ = f.StartNewReplay(ctx)
 
 			Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
-				f.RestartCurrentReplay(ctx, errors.New("restarted from inside the step"))
+				f.RestartCurrentReplay(errors.New("restarted from inside the step"))
 				return "", ctx.Err()
 			}), struct{}{})
 		})
@@ -288,7 +288,7 @@ func TestStep(t *testing.T) {
 			ctx, _ = f.StartNewReplay(ctx)
 
 			result, err := Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
-				f.RestartCurrentReplay(ctx, errors.New("restarted from inside the step"))
+				f.RestartCurrentReplay(errors.New("restarted from inside the step"))
 				return "result", nil
 			}), struct{}{})
 			// real work: recorded and returned, the replay terminates at its next step instead

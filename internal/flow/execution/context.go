@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/futura-platform/futura/flog"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/replay"
@@ -39,6 +38,8 @@ type FlowExecution struct {
 	running bool
 	// pendingInvalidation holds the mutations that invalidate the sequence, in a durable form.
 	pendingInvalidation []func(tx executiontype.Container)
+	// cancelCurrentReplay cancels the most recently started replay. Protected by mu.
+	cancelCurrentReplay context.CancelCauseFunc
 }
 
 var ErrTransactionFailed = errors.New("transaction failed")
@@ -83,7 +84,6 @@ func WithFlow(ctx context.Context, exec *FlowExecution) context.Context {
 }
 
 var (
-	ErrNoCurrentReplay      = errors.New("no current replay")
 	ErrNilCancellationCause = errors.New("current replay cancellation cause cannot be nil")
 
 	ErrRestartReplay = errors.New("restarting replay")
@@ -92,17 +92,18 @@ var (
 // RestartCurrentReplay cancels the current replay, which will always start a new one.
 // (Regardless of whether or not the last replay was successful).
 // This will also skip the default end of replay behavior, including rewinding the sequence index and resetting the replay flags.
-func (f *FlowExecution) RestartCurrentReplay(ctx context.Context, cause error) {
-	if !replay.Has(ctx) {
-		panic(ftrerrors.InconsistentStateError(ErrNoCurrentReplay))
-	} else if cause == nil {
+func (f *FlowExecution) RestartCurrentReplay(cause error) {
+	if cause == nil {
 		panic(ftrerrors.InconsistentStateError(ErrNilCancellationCause))
 	}
-	l := flog.FromContext(ctx)
-	l.LogAttrs(ctx, slog.LevelDebug, "restarting replay",
-		slog.String("cause", cause.Error()),
-	)
-	replay.Cancel(ctx, fmt.Errorf("%w: %w", ErrRestartReplay, cause))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cancelCurrentReplay == nil {
+		return
+	}
+
+	slog.Debug("restarting replay", slog.String("cause", cause.Error()))
+	f.cancelCurrentReplay(fmt.Errorf("%w: %w", ErrRestartReplay, cause))
 }
 
 var DefaultReplayFlags = replay.Flags{
@@ -141,19 +142,39 @@ func (f *FlowExecution) setEpoch(tx executiontype.Container, key string, epoch u
 	}
 }
 
+// StartNewReplay begins a replay. Any pending invalidation is committed first
 func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, uint64) {
-	flags := DefaultReplayFlags
-	var dirtyEpoch uint64
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		dirtyEpoch = f.getEpoch(tx, dirtyEpochKey)
-		epoch := f.getEpoch(tx, evaluatedEpochKey)
-		if dirtyEpoch > epoch {
-			// we are in un charted territory, so allow moment order to change
-			flags.PanicOnMomentOrderChange = false
-		}
-	})
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
-	return sequence.With(replay.With(ctx), flags), dirtyEpoch
+	replayCtx, cancel := replay.With(ctx)
+	f.cancelCurrentReplay = cancel
+
+	// The transaction may be retried by the container, so it only reads and writes durable state.
+	// In-memory state (the pending queue) is consumed after it commits.
+	var flags replay.Flags
+	var dirtyEpoch uint64
+	err := f.c.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
+		dirtyEpoch = f.getEpoch(tx, dirtyEpochKey)
+		if len(f.pendingInvalidation) > 0 {
+			dirtyEpoch++
+			f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
+			for _, write := range f.pendingInvalidation {
+				write(tx)
+			}
+		}
+		flags = replay.Flags{
+			// an unevaluated invalidation is uncharted territory, so allow the moment order to change
+			PanicOnMomentOrderChange: dirtyEpoch <= f.getEpoch(tx, evaluatedEpochKey),
+		}
+		return nil
+	})
+	if err != nil {
+		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
+	}
+	f.pendingInvalidation = nil
+
+	return sequence.With(replayCtx, flags), dirtyEpoch
 }
 
 var (
@@ -183,32 +204,14 @@ func namespacedDurableKeyConstructor(namespace string) func(key string) string {
 	}
 }
 
-// InvalidateSequence records a pending invalidation of the sequence. write is called with the
-// transaction that commits it, so that the invalidation is never durable without its mutation.
-// Nothing is written until CommitInvalidation.
-func (f *FlowExecution) InvalidateSequence(write func(tx executiontype.Container)) {
+// InvalidateSequence records a pending invalidation of the sequence, through the apply func, behind the execution's lock.
+// write is called with the transaction that commits it, so that the invalidation is never made durable without its mutation.
+// Nothing is written until the next StartNewReplay call.
+func (f *FlowExecution) InvalidateSequence(apply func(), write func(tx executiontype.Container)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	apply()
 	f.pendingInvalidation = append(f.pendingInvalidation, write)
-}
-
-// CommitInvalidation bumps the dirty epoch and applies every pending invalidation, in one transaction.
-func (f *FlowExecution) CommitInvalidation(ctx context.Context) {
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		epoch := f.getEpoch(tx, dirtyEpochKey)
-		f.setEpoch(tx, dirtyEpochKey, epoch+1)
-		for _, write := range f.pendingInvalidation {
-			write(tx)
-		}
-		f.pendingInvalidation = nil
-	})
-}
-
-// HasPendingInvalidation reports whether an invalidation has been recorded but not yet committed.
-func (f *FlowExecution) HasPendingInvalidation() bool {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	return len(f.pendingInvalidation) > 0
 }
 
 func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.Identity, ok bool) {
@@ -307,8 +310,6 @@ func (f *FlowExecution) TryStartRun() (stop func(), ok bool) {
 		return nil, false
 	}
 	f.running = true
-	// anything left pending belongs to a run that never committed it, and is discarded.
-	f.pendingInvalidation = nil
 	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()

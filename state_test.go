@@ -378,4 +378,50 @@ func TestState(t *testing.T) {
 			assert.Equal(t, 1, r)
 		})
 	})
+	t.Run("a state container from a previous replay restarts the replay that is currently running", func(t *testing.T) {
+		// Set is callable from anywhere, including through a container that was created in an
+		// earlier replay and held across a restart. It must restart the replay running now, not
+		// the dead one it was created in, or the running replay would read the changed value
+		// and take a new branch under strict checking.
+		var held futura.StateContainer[bool]
+		replays := 0
+		r, err := futura.NewFlow[struct{}, int]().Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			replays++
+			s := futura.State(b, false)
+			switch replays {
+			case 1:
+				held = s
+				return 0, futura.Action(b, func(ctx context.Context) error { return errors.New("retry") })
+			case 2:
+				var wg sync.WaitGroup
+				wg.Go(func() { held.Set(true) })
+				wg.Wait()
+			}
+			if s.V() {
+				return 1, futura.Action(b, func(ctx context.Context) error { return nil })
+			}
+			return 0, futura.Action(b, func(ctx context.Context) error { return nil })
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r)
+	})
+	t.Run("a state change with no replay running is applied by the next replay to start", func(t *testing.T) {
+		var held futura.StateContainer[int]
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			s := futura.State(b, 0)
+			held = s
+			return s.V(), nil
+		}
+		f := futura.NewFlow[struct{}, int]()
+		r, err := f.Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 0, r)
+
+		// nothing is running: the change waits for the next execution
+		assert.NotPanics(t, func() { held.Set(7) })
+
+		r, err = f.Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 7, r)
+	})
 }

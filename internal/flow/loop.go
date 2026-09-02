@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/futura-platform/futura/ftype"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
@@ -18,7 +17,6 @@ type CallableFlow[A, T any] func(ctx context.Context, args A) (T, error)
 
 var (
 	ErrOccurredOutsideOfEvaluation = errors.New("error occurred outside of step evaluation")
-	ErrPendingInvalidationAtSettle = errors.New("a replay settled with a pending sequence invalidation")
 )
 
 // Loop implements the core logic of the flow. It is responsible for:
@@ -58,7 +56,6 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		case errors.Is(context.Cause(replayCtx), execution.ErrRestartReplay):
 			// special case to always restart the replay, even if otherwise the result, err combo would be terminal
 			// if the replay was restarted, the sequence has NOT been settled, so we need to skip the settle step.
-			f.CommitInvalidation(ctx)
 			continue
 		case errors.Is(err, ftype.ErrCancelFlow):
 			// special case to immedieately return the error from the loop.
@@ -69,17 +66,14 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 			return result, fmt.Errorf("%w: %w", ErrOccurredOutsideOfEvaluation, err)
 		}
 
-		// now that all the terminal failure states have been handled, we can settle the sequence.
-		if f.HasPendingInvalidation() {
-			// an invalidation always restarts the replay, this should never happen.
-			panic(ftrerrors.InconsistentStateError(ErrPendingInvalidationAtSettle))
-		}
 		// A failed step records its call order entry without advancing the index (to enforce strictness on the follow up call),
 		// so the index is the last recorded entry on failure but one past it on success.
 		lastRecordedIndex := sequence.GetIndex(replayCtx)
 		if err == nil {
 			lastRecordedIndex--
 		}
+
+		// now that all the terminal failure states have been handled, we can settle the sequence.
 		f.SettleSequence(ctx, lastRecordedIndex, dirtyEpoch)
 
 		if err == nil {
