@@ -19,7 +19,8 @@ type Container interface {
 	// call order
 	SetCallOrderAt(index int, identity moment.Identity)
 	AppendCallOrder(identity moment.Identity)
-	// remove all call order entries that are > index
+	// remove all call order entries that are > index,
+	// clamped to the length of the call order to prevent out of bounds access.
 	TruncateCallOrderAt(index int)
 
 	// memo table
