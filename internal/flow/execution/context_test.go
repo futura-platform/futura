@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
@@ -462,6 +463,39 @@ func TestInvalidateSequence(t *testing.T) {
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 		assert.True(t, sequence.GetFlags(replayCtx).PanicOnMomentOrderChange)
 	})
+	t.Run("a replay cannot start between a mutation being applied and its invalidation being recorded", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := running(t, NewFlowExecutionWithContainer(c))
+
+		applied := make(chan struct{})
+		release := make(chan struct{})
+		invalidated := make(chan struct{})
+		go func() {
+			defer close(invalidated)
+			f.InvalidateSequence(func() {
+				close(applied)
+				<-release // hold the lock with the mutation applied but the invalidation not yet recorded
+			}, func(executiontype.Container) {})
+		}()
+		<-applied
+
+		started := make(chan replay.Flags)
+		go func() {
+			replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
+			started <- sequence.GetFlags(replayCtx)
+		}()
+
+		select {
+		case <-started:
+			t.Fatal("a replay started while a mutation was applied but not yet invalidated")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		close(release)
+		<-invalidated
+		flags := <-started
+		assert.False(t, flags.PanicOnMomentOrderChange, "the replay that started after the invalidation must be relaxed")
+	})
 	t.Run("an invalidation recorded between runs is committed by the next run's first replay", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := NewFlowExecutionWithContainer(c)
@@ -482,6 +516,26 @@ func TestInvalidateSequence(t *testing.T) {
 }
 
 func TestSettleSequence(t *testing.T) {
+	t.Run("survives the container retrying the transaction", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		for range 3 {
+			c.AppendCallOrder(moment.Identity{})
+		}
+		retrying := &retryingContainer{InMemoryContainer: c, attempts: 3}
+		f := NewFlowExecutionWithContainer(retrying)
+
+		f.SettleSequence(t.Context(), 1, 4)
+
+		assert.Equal(t, 3, retrying.calls, "the closure should have run once per attempt")
+		assert.Equal(t, 2, c.CallOrderLength(), "truncated to the recorded index exactly once")
+		encoded, ok, err := c.LoadDurable(evaluatedEpochKey)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+		var epoch uint64
+		_, err = binary.Decode(encoded, binary.LittleEndian, &epoch)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(4), epoch)
+	})
 	t.Run("panics if the evaluated epoch would move backwards", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := NewFlowExecutionWithContainer(c)
@@ -559,6 +613,9 @@ func (r *retryingContainer) Transact(ctx context.Context, fn func(ctx context.Co
 			if v, ok, _ := r.InMemoryContainer.LoadDurable(key); ok {
 				scratch.StoreDurable(key, v)
 			}
+		}
+		for i := range r.InMemoryContainer.CallOrderLength() {
+			scratch.AppendCallOrder(r.InMemoryContainer.CallOrderAt(i))
 		}
 		if r.scratchDirtyEpoch != 0 {
 			encoded, _ := binary.Append(nil, binary.LittleEndian, r.scratchDirtyEpoch)
