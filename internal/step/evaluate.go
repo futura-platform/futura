@@ -24,6 +24,11 @@ var (
 	ErrUnexpectedBranchTaken        = errors.New("unexpected branch taken, new branches should only be triggered by a futura state change")
 )
 
+func init() {
+	// Evaluate is the single point at which user callstacks are captured for moment identities.
+	replay.SetCaptureFunction(Evaluate[struct{}, struct{}])
+}
+
 func Evaluate[A comparable, R any](
 	ctx context.Context,
 	fn moment.Fn[A, R],
@@ -33,7 +38,7 @@ func Evaluate[A comparable, R any](
 		return
 	}
 
-	callstack, ok := replay.GetClosestReplayUserCallstack(0)
+	callstack, ok := replay.GetClosestReplayUserCallstack()
 	if !ok {
 		panic(ftrerrors.InconsistentStateError(ErrEvaledOutsideOfAFlowFunction))
 	}
