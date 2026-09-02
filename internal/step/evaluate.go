@@ -116,12 +116,13 @@ func evaluateWithCallstack[A comparable, R any](
 	// then get the moment from the cache
 	currentMomentValue, ok := f.GetMoment(ctx, identity)
 	currentMoment := &currentMomentValue
-	if !ok {
-		currentMoment = moment.NewMoment(fn, args)
-	}
 
 	// validate BEFORE deferring the output handler, so that in the event of a panic, nothing is recorded.
 	needsExecution := !ok || !currentMoment.Validate(thisSequenceIndex, fn, args, identity)
+	if needsExecution {
+		// the recorded moment (if any) is for a stale input, so record the execution against a fresh one.
+		currentMoment = moment.NewMoment(fn, args)
+	}
 	defer func() {
 		if err != nil {
 			currentMoment.Invalidate()
