@@ -12,6 +12,7 @@ import (
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/goroutinebind"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/futura-platform/futura/moment"
 	"github.com/petermattis/goid"
@@ -297,6 +298,22 @@ func TestRecordCurrentMoment(t *testing.T) {
 		m, _ := c.GetMoment(recordKey)
 		assert.Equal(t, m, *recordMoment)
 	})
+	t.Run("survives the container retrying the transaction", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		retrying := containertest.NewRetrying(c, 3)
+		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(retrying))), DefaultReplayFlags)
+		f := MustFromContext(ctx)
+
+		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
+		recordMoment := moment.NewMoment(placeholderCallable, 1)
+
+		f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
+
+		assert.Equal(t, 3, retrying.Calls, "the closure should have run once per attempt")
+		assert.Equal(t, 1, c.CallOrderLength(), "recorded exactly once")
+		assert.True(t, c.HasMoment(recordKey))
+		assert.True(t, sequence.IsSeen(ctx, recordKey))
+	})
 	t.Run("with existing cached state case", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		ctx := WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(c)))
@@ -437,7 +454,7 @@ func TestInvalidateSequence(t *testing.T) {
 	})
 	t.Run("committing survives the container retrying the transaction", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		retrying := &retryingContainer{InMemoryContainer: c, attempts: 2}
+		retrying := containertest.NewRetrying(c, 3)
 		f := running(t, NewFlowExecutionWithContainer(retrying))
 
 		writes := 0
@@ -447,8 +464,8 @@ func TestInvalidateSequence(t *testing.T) {
 		})
 		dirtyEpoch := startReplay(t, f)
 
-		assert.Equal(t, 2, retrying.calls, "the closure should have run once per attempt")
-		assert.Equal(t, 2, writes, "the write runs on every attempt, against a fresh transaction")
+		assert.Equal(t, 3, retrying.Calls, "the closure should have run once per attempt")
+		assert.Equal(t, 3, writes, "the write runs on every attempt, against a fresh transaction")
 		assert.Equal(t, uint64(1), getEpoch(t, c), "but the epoch is bumped exactly once")
 		assert.Equal(t, uint64(1), dirtyEpoch)
 		_, ok, err := c.LoadDurable("value")
@@ -457,7 +474,13 @@ func TestInvalidateSequence(t *testing.T) {
 	})
 	t.Run("the replay's flags come from the attempt that committed, not an earlier one", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		retrying := &retryingContainer{InMemoryContainer: c, attempts: 2, scratchDirtyEpoch: 5}
+		retrying := containertest.NewRetrying(c, 2)
+		retrying.StaleView = func(tx executiontype.Container) {
+			// the discarded attempt sees an epoch that would relax the replay
+			encoded, err := binary.Append(nil, binary.LittleEndian, uint64(5))
+			assert.NoError(t, err)
+			assert.NoError(t, tx.StoreDurable(dirtyEpochKey, encoded))
+		}
 		f := running(t, NewFlowExecutionWithContainer(retrying))
 
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
@@ -521,12 +544,12 @@ func TestSettleSequence(t *testing.T) {
 		for range 3 {
 			c.AppendCallOrder(moment.Identity{})
 		}
-		retrying := &retryingContainer{InMemoryContainer: c, attempts: 3}
+		retrying := containertest.NewRetrying(c, 3)
 		f := NewFlowExecutionWithContainer(retrying)
 
 		f.SettleSequence(t.Context(), 1, 4)
 
-		assert.Equal(t, 3, retrying.calls, "the closure should have run once per attempt")
+		assert.Equal(t, 3, retrying.Calls, "the closure should have run once per attempt")
 		assert.Equal(t, 2, c.CallOrderLength(), "truncated to the recorded index exactly once")
 		encoded, ok, err := c.LoadDurable(evaluatedEpochKey)
 		assert.NoError(t, err)
@@ -591,40 +614,4 @@ func TestNewFlowExecutionFromState(t *testing.T) {
 	f := NewFlowExecutionWithContainer(c)
 	assert.NotNil(t, f)
 	assert.Equal(t, c, f.c)
-}
-
-// retryingContainer runs every transaction closure attempts times, discarding all but the last
-// attempt's writes, the way a transactional backend does when it retries on conflict.
-type retryingContainer struct {
-	*executiontype.InMemoryContainer
-	attempts int
-	calls    int
-	// scratchDirtyEpoch, if set, is the dirty epoch the discarded attempts see instead of the
-	// real one, so a test can make an earlier attempt reach a different decision.
-	scratchDirtyEpoch uint64
-}
-
-func (r *retryingContainer) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
-	for i := 1; i < r.attempts; i++ {
-		r.calls++
-		scratch := executiontype.NewInMemoryContainer()
-		// seed the scratch tx with the current durable state so reads behave like the real attempt
-		for _, key := range []string{dirtyEpochKey, evaluatedEpochKey} {
-			if v, ok, _ := r.InMemoryContainer.LoadDurable(key); ok {
-				scratch.StoreDurable(key, v)
-			}
-		}
-		for i := range r.InMemoryContainer.CallOrderLength() {
-			scratch.AppendCallOrder(r.InMemoryContainer.CallOrderAt(i))
-		}
-		if r.scratchDirtyEpoch != 0 {
-			encoded, _ := binary.Append(nil, binary.LittleEndian, r.scratchDirtyEpoch)
-			scratch.StoreDurable(dirtyEpochKey, encoded)
-		}
-		if err := fn(ctx, scratch); err != nil {
-			return err
-		}
-	}
-	r.calls++
-	return r.InMemoryContainer.Transact(ctx, fn)
 }

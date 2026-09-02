@@ -9,6 +9,7 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -402,6 +403,26 @@ func TestState(t *testing.T) {
 			}
 			return 0, futura.Action(b, func(ctx context.Context) error { return nil })
 		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r)
+	})
+	t.Run("a state change is durable when the container retries its transactions", func(t *testing.T) {
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			s := futura.State(b, 0)
+			if s.V() == 0 {
+				s.Set(1)
+				return 0, nil
+			}
+			return s.V(), nil
+		}
+
+		c := executiontype.NewInMemoryContainer()
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewRetrying(c, 3)).Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r)
+
+		// a fresh process over the committed state must see the change
+		r, err = futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
 	})

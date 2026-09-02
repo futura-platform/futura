@@ -13,6 +13,7 @@ import (
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flowhooks"
+	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/futura-platform/futura/privateencoding"
 	"github.com/stretchr/testify/assert"
@@ -735,6 +736,44 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, int32(2), counting.storeCalls.Load())
+	})
+
+	t.Run("survives the container retrying the transaction", func(t *testing.T) {
+		h := newByteHandle("writeToRetryingHandle")
+		c := executiontype.NewInMemoryContainer()
+		retrying := containertest.NewRetrying(c, 3)
+		exec := execution.NewFlowExecutionWithContainer(retrying)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref, _ := h.Use(b)
+		*ref = byte(5)
+		var didChange bool
+		err := retrying.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			didChange = h.WriteTo(b, tx)
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.True(t, didChange, "the committing attempt must see the value as unstored")
+
+		value, ok := storedValue(t, c, h)
+		assert.True(t, ok, "the committing attempt must contain the write")
+		assert.Equal(t, []byte{byte(5)}, value)
+	})
+
+	t.Run("persist survives the container retrying the transaction", func(t *testing.T) {
+		h := newByteHandle("persistRetryingHandle")
+		c := executiontype.NewInMemoryContainer()
+		retrying := containertest.NewRetrying(c, 3)
+		exec := execution.NewFlowExecutionWithContainer(retrying)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref, persist := h.Use(b)
+		*ref = byte(5)
+		assert.True(t, persist())
+
+		value, ok := storedValue(t, c, h)
+		assert.True(t, ok)
+		assert.Equal(t, []byte{byte(5)}, value)
 	})
 
 	t.Run("is a no-op for a handle that was provided but never used", func(t *testing.T) {
