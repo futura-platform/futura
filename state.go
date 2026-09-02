@@ -145,7 +145,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 			// sequence invalidation, when the next replay starts. This allows for multiple state changes to happen atomically, ensuring durability.
 			f.InvalidateSequence(
 				func() { stage(stateKey, encoded) },
-				func(tx executiontype.Container) { stateContext.WriteTo(b, tx) },
+				func(tx executiontype.Container) func() { return stateContext.WriteTo(b, tx) },
 			)
 			f.RestartCurrentReplay(errors.New("state updated by setState"))
 		},

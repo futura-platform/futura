@@ -37,7 +37,7 @@ type FlowExecution struct {
 	// and sync.RWMutex is not reentrant.
 	running bool
 	// pendingInvalidation holds the mutations that invalidate the sequence, in a durable form.
-	pendingInvalidation []func(tx executiontype.Container)
+	pendingInvalidation []func(tx executiontype.Container) (onCommit func())
 	// cancelCurrentReplay cancels the most recently started replay. Protected by mu.
 	cancelCurrentReplay context.CancelCauseFunc
 }
@@ -151,16 +151,20 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	f.cancelCurrentReplay = cancel
 
 	// The transaction may be retried by the container, so it only reads and writes durable state.
-	// In-memory state (the pending queue) is consumed after it commits.
+	// In-memory state (the pending queue, and whatever the writes update once committed) is consumed after it commits.
 	var flags replay.Flags
 	var dirtyEpoch uint64
+	var onCommit []func()
 	err := f.c.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
 		dirtyEpoch = f.getEpoch(tx, dirtyEpochKey)
+		onCommit = nil
 		if len(f.pendingInvalidation) > 0 {
 			dirtyEpoch++
 			f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
 			for _, write := range f.pendingInvalidation {
-				write(tx)
+				if fn := write(tx); fn != nil {
+					onCommit = append(onCommit, fn)
+				}
 			}
 		}
 		flags = replay.Flags{
@@ -173,6 +177,9 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
 	}
 	f.pendingInvalidation = nil
+	for _, fn := range onCommit {
+		fn()
+	}
 
 	return sequence.With(replayCtx, flags), dirtyEpoch
 }
@@ -206,8 +213,9 @@ func namespacedDurableKeyConstructor(namespace string) func(key string) string {
 
 // InvalidateSequence records a pending invalidation of the sequence, through the apply func, behind the execution's lock.
 // write is called with the transaction that commits it, so that the invalidation is never made durable without its mutation.
+// The write func must adhere to the requirements of a transaction callback (it should be replay safe).
 // Nothing is written until the next StartNewReplay call.
-func (f *FlowExecution) InvalidateSequence(apply func(), write func(tx executiontype.Container)) {
+func (f *FlowExecution) InvalidateSequence(apply func(), write func(tx executiontype.Container) (onCommit func())) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	apply()
@@ -224,11 +232,11 @@ func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.I
 				sequenceLength: size,
 			}))
 		} else if i == size {
+			identity, ok = moment.Identity{}, false
 			return
 		}
 
-		identity = tx.CallOrderAt(i)
-		ok = true
+		identity, ok = tx.CallOrderAt(i), true
 	})
 	return identity, ok
 }
@@ -245,14 +253,14 @@ func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity)
 // RecordCurrentMoment stores the current identity+moment (growing the sequence slice if necessary)
 // it also marks the identity as seen.
 func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment moment.Moment) {
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		if sequence.IsSeen(ctx, identity) {
-			// if we see an identity twice in the same replay, the consumer is doing something wrong
-			panic(ftrerrors.InconsistentStateError(UnexpectedDuplicateMomentError{
-				identity: identity,
-			}))
-		}
+	if sequence.IsSeen(ctx, identity) {
+		// if we see an identity twice in the same replay, the consumer is doing something wrong
+		panic(ftrerrors.InconsistentStateError(UnexpectedDuplicateMomentError{
+			identity: identity,
+		}))
+	}
 
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		i := sequence.GetIndex(ctx)
 		size := tx.CallOrderLength()
 		if i > size {
@@ -266,8 +274,8 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 			tx.SetCallOrderAt(i, identity)
 		}
 		tx.SetMoment(identity, currentMoment)
-		sequence.MarkSeen(ctx, identity)
 	})
+	sequence.MarkSeen(ctx, identity)
 }
 
 func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]byte, bool) {

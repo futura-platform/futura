@@ -212,20 +212,27 @@ func (d *DurableHandle[T]) Use(ctx context.Context) (ref *T, persist func() (did
 		// persist is callable anywhere, so we need to temporarily bind to the current goroutine to allow the store to happen.
 		boundCtx := goroutinebind.BindGoroutine(ctx)
 		exec := execution.MustFromContext(boundCtx)
-		return d.writeTo(r, func(serialized []byte) {
+		onCommit := d.writeTo(r, func(serialized []byte) {
 			exec.StoreDurable(boundCtx, string(d.key), serialized)
 		})
+		if onCommit == nil {
+			return false
+		}
+		// the store was its own transaction, so it has already committed
+		onCommit()
+		return true
 	}
 }
 
 // writeTo serializes the resolved value and, if it differs from what was last stored, hands the
-// bytes to store. It returns whether store was called.
-func (d *DurableHandle[T]) writeTo(r *durableResolver[T], store func(serialized []byte)) (didChange bool) {
+// bytes to store. It returns the func that records the store as committed, or nil if nothing was stored.
+// The record is deferred to the caller because store may be part of a transaction that has not committed yet.
+func (d *DurableHandle[T]) writeTo(r *durableResolver[T], store func(serialized []byte)) (onCommit func()) {
 	r.durableMu.Lock()
 	defer r.durableMu.Unlock()
 
 	if r.cached.value == nil {
-		return false
+		return nil
 	}
 	serialized, err := d.marshal(r.cached.value)
 	if err != nil {
@@ -234,19 +241,23 @@ func (d *DurableHandle[T]) writeTo(r *durableResolver[T], store func(serialized 
 
 	// don't call store if the value hasn't changed
 	localChecksum := xxhash.Sum64(serialized)
-	didChange = r.cached.sync != syncLevelRemote || localChecksum != r.cached.checksum
-	if didChange {
-		store(serialized)
+	if r.cached.sync == syncLevelRemote && localChecksum == r.cached.checksum {
+		return nil
+	}
+	store(serialized)
+	return func() {
+		r.durableMu.Lock()
+		defer r.durableMu.Unlock()
 		// update remote state so repeated persist calls are idempotent.
 		r.cached.checksum = localChecksum
 		r.cached.sync = syncLevelRemote
 	}
-	return didChange
 }
 
 // WriteTo writes the handle's value into tx if it has changed since it was last stored.
 // It is the transactional counterpart of persist, for callers that own the transaction.
-func (d *DurableHandle[T]) WriteTo(ctx context.Context, tx executiontype.Container) (didChange bool) {
+// The returned func must be called once tx has committed; it is nil if nothing was written.
+func (d *DurableHandle[T]) WriteTo(ctx context.Context, tx executiontype.Container) (onCommit func()) {
 	r, ok := ctx.Value(d.key).(*durableResolver[T])
 	if !ok {
 		panic(fmt.Errorf("%w: %s", ErrDurableResolverNotFound, d.key))

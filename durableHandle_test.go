@@ -672,13 +672,13 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		_, ok := storedValue(t, c, h)
 		assert.False(t, ok)
 
-		var didChange bool
+		var onCommit func()
 		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
-			didChange = h.WriteTo(b, tx)
+			onCommit = h.WriteTo(b, tx)
 			return nil
 		})
 		assert.NoError(t, err)
-		assert.True(t, didChange)
+		assert.NotNil(t, onCommit)
 
 		value, ok := storedValue(t, c, h)
 		assert.True(t, ok)
@@ -698,13 +698,13 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		ref, _ := h.Use(b)
 		assert.Equal(t, byte(42), *ref)
 
-		var didChange bool
+		var onCommit func()
 		err = counting.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
-			didChange = h.WriteTo(b, tx)
+			onCommit = h.WriteTo(b, tx)
 			return nil
 		})
 		assert.NoError(t, err)
-		assert.False(t, didChange)
+		assert.Nil(t, onCommit)
 		assert.Equal(t, int32(0), counting.storeCalls.Load())
 	})
 
@@ -720,22 +720,44 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		ref, persist := h.Use(b)
 
 		*ref = byte(1)
+		var onCommit func()
 		err := counting.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
-			assert.True(t, h.WriteTo(b, tx))
+			onCommit = h.WriteTo(b, tx)
 			return nil
 		})
 		assert.NoError(t, err)
+		assert.NotNil(t, onCommit)
+		onCommit()
 		assert.False(t, persist())
 		assert.Equal(t, int32(1), counting.storeCalls.Load())
 
 		*ref = byte(2)
 		assert.True(t, persist())
 		err = counting.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
-			assert.False(t, h.WriteTo(b, tx))
+			assert.Nil(t, h.WriteTo(b, tx))
 			return nil
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, int32(2), counting.storeCalls.Load())
+	})
+
+	t.Run("a write is not recorded as stored until its transaction commits", func(t *testing.T) {
+		// Until onCommit is called, the resolver must still consider the value unstored, so a
+		// failed or retried transaction does not make later writes think there is nothing to do.
+		h := newByteHandle("writeToUncommittedHandle")
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(c)
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref, _ := h.Use(b)
+		*ref = byte(1)
+		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
+			assert.NotNil(t, h.WriteTo(b, tx))
+			// the same write again, within an attempt that has not committed
+			assert.NotNil(t, h.WriteTo(b, tx))
+			return nil
+		})
+		assert.NoError(t, err)
 	})
 
 	t.Run("survives the container retrying the transaction", func(t *testing.T) {
@@ -747,13 +769,13 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 
 		ref, _ := h.Use(b)
 		*ref = byte(5)
-		var didChange bool
+		var onCommit func()
 		err := retrying.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
-			didChange = h.WriteTo(b, tx)
+			onCommit = h.WriteTo(b, tx)
 			return nil
 		})
 		assert.NoError(t, err)
-		assert.True(t, didChange, "the committing attempt must see the value as unstored")
+		assert.NotNil(t, onCommit, "the committing attempt must see the value as unstored")
 
 		value, ok := storedValue(t, c, h)
 		assert.True(t, ok, "the committing attempt must contain the write")
@@ -785,7 +807,7 @@ func TestDurableHandle_WriteTo(t *testing.T) {
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
 		err := c.Transact(t.Context(), func(_ context.Context, tx executiontype.Container) error {
-			assert.False(t, h.WriteTo(b, tx))
+			assert.Nil(t, h.WriteTo(b, tx))
 			return nil
 		})
 		assert.NoError(t, err)
