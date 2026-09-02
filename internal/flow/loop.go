@@ -67,7 +67,13 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		}
 
 		// now that all the terminal failure states have been handled, we can settle the sequence.
-		f.SettleSequence(ctx, sequence.GetIndex(replayCtx), dirtyEpoch)
+		// A failed step records its call order entry without advancing the index (to enforce strictness on the follow up call),
+		// so the index is the last recorded entry on failure but one past it on success.
+		lastRecordedIndex := sequence.GetIndex(replayCtx)
+		if err == nil {
+			lastRecordedIndex--
+		}
+		f.SettleSequence(ctx, lastRecordedIndex, dirtyEpoch)
 
 		if err == nil {
 			return result, nil

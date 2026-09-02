@@ -345,6 +345,46 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, "success on replay 4", rval)
 	})
 
+	t.Run("the call order is truncated to the final path on clean completion", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(c))
+		f := execution.UnsafeFromContext(ctx)
+
+		evaluate := func(ctx context.Context, label string) error {
+			_, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				return label, nil
+			}, ftype.WithLabel(label)), struct{}{})
+			return err
+		}
+
+		replays := 0
+		r, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ struct{}) (string, error) {
+			replays++
+			if err := evaluate(ctx, "first call"); err != nil {
+				return "", err
+			}
+			if replays == 1 {
+				// the old path records two more calls before the branch closes
+				if err := evaluate(ctx, "second call"); err != nil {
+					return "", err
+				}
+				if err := evaluate(ctx, "third call"); err != nil {
+					return "", err
+				}
+				f.InvalidateSequence(ctx)
+				f.RestartCurrentReplay(ctx, errors.New("closing the branch"))
+				return "", nil
+			}
+			return "done", nil
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, "done", r)
+		assert.Equal(t, 2, replays)
+
+		// after a clean completion, the record must contain exactly the final path
+		assert.Equal(t, 1, c.CallOrderLength())
+	})
+
 	t.Run("terminal exits do not settle the sequence", func(t *testing.T) {
 		assertDoesNotSettle := func(t *testing.T, expectedErr error, exit func(ctx context.Context, cancel context.CancelFunc) error) {
 			t.Helper()
