@@ -22,8 +22,9 @@ func init() {
 	if !ok {
 		panic("failed to get caller")
 	}
-	thisFile = file
-	transparentCallFile = filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(file))), "utils", "testutil", "transparentCall.go")
+	// callsites are import-path relative, not filesystem paths
+	thisFile = "github.com/futura-platform/futura/internal/flow/replay/" + filepath.Base(file)
+	transparentCallFile = "github.com/futura-platform/futura/internal/utils/testutil/transparentCall.go"
 
 	// this package has no capture function of its own, so the tests pin one here.
 	SetCaptureFunction(capture)
@@ -44,8 +45,8 @@ func TestGetClosestReplayExecutionFrame(t *testing.T) {
 					callpath := CallstackToCallpath(callstack)
 					assert.True(t, ok)
 					assert.Equal(t, moment.Callpath{
-						{File: thisFile, Line: 50},
-						{File: thisFile, Line: 43},
+						{File: thisFile, Line: 51},
+						{File: thisFile, Line: 44},
 					}, callpath)
 				}()
 				return nil, nil
@@ -67,8 +68,8 @@ func TestGetClosestReplayExecutionFrame(t *testing.T) {
 						assert.True(t, ok)
 						// the recursion frames, plus the frame that calls capture
 						assert.Len(t, callpath, recurses+1)
-						assert.Equal(t, moment.Callsite{File: thisFile, Line: 73}, callpath[0])
-						assert.Equal(t, moment.Callsite{File: thisFile, Line: 65}, callpath[len(callpath)-1])
+						assert.Equal(t, moment.Callsite{File: thisFile, Line: 74}, callpath[0])
+						assert.Equal(t, moment.Callsite{File: thisFile, Line: 66}, callpath[len(callpath)-1])
 					}
 					indirect()
 					return nil, nil
@@ -87,8 +88,8 @@ func TestGetClosestReplayExecutionFrame(t *testing.T) {
 							callpath := CallstackToCallpath(callstack)
 							assert.True(t, ok)
 							assert.Equal(t, moment.Callpath{
-								{File: thisFile, Line: 93},
-								{File: thisFile, Line: 86},
+								{File: thisFile, Line: 94},
+								{File: thisFile, Line: 87},
 							}, callpath)
 						}()
 						return nil, nil
@@ -103,13 +104,13 @@ func TestGetClosestReplayExecutionFrame(t *testing.T) {
 			callpath := CallstackToCallpath(callstack)
 			assert.True(t, ok)
 			assert.Equal(t, moment.Callpath{
-				{File: thisFile, Line: 125},
+				{File: thisFile, Line: 126},
 				{File: transparentCallFile, Line: 10},
-				{File: thisFile, Line: 121},
+				{File: thisFile, Line: 122},
 				{File: transparentCallFile, Line: 10},
-				{File: thisFile, Line: 117},
+				{File: thisFile, Line: 118},
 				{File: transparentCallFile, Line: 10},
-				{File: thisFile, Line: 102},
+				{File: thisFile, Line: 103},
 			}, callpath)
 		}
 

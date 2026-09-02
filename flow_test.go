@@ -113,8 +113,7 @@ func TestFlow(t *testing.T) {
 		assert.Equal(t, runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(), fnChange.NewMomentFnName)
 		// the identity's callpath spans from the flow fn's Step call up through futura's own
 		// Execute wrapper, so pin it by its user callsite rather than reconstructing every frame.
-		_, file, _, _ := runtime.Caller(0)
-		assert.Contains(t, fnChange.Identity.Callpath().V(), moment.Callsite{File: file, Line: 101})
+		assert.Contains(t, fnChange.Identity.Callpath().V(), moment.Callsite{File: "github.com/futura-platform/futura_test/flow_test.go", Line: 101})
 	})
 	t.Run("A single keyed moment identity should be able to be used with multiple moment functions", func(t *testing.T) {
 		r, err := checkMultipleMomentFunctions(t, func(b futura.FlowBuilder) futura.FlowBuilder {

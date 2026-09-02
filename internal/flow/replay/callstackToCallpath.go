@@ -1,15 +1,51 @@
 package replay
 
 import (
+	"path"
 	"runtime"
+	"strings"
 
 	"github.com/futura-platform/futura/moment"
 )
 
+// CallstackToCallpath converts frames into a callpath of location-independent callsites.
 func CallstackToCallpath(callstack []runtime.Frame) moment.Callpath {
 	p := make(moment.Callpath, len(callstack))
 	for i, frame := range callstack {
-		p[i] = moment.Callsite{File: frame.File, Line: frame.Line}
+		p[i] = moment.Callsite{
+			File: path.Join(packagePath(frame.Function), path.Base(frame.File)),
+			Line: frame.Line,
+		}
 	}
 	return p
+}
+
+// packagePath returns the import path of the package that declares a fully qualified symbol.
+func packagePath(function string) string {
+	slash := strings.LastIndexByte(function, '/')
+	rest := function[slash+1:]
+	for i := 0; i < len(rest); i++ {
+		if rest[i] != '.' {
+			continue
+		}
+		if isVersionTail(rest[i+1:]) {
+			continue
+		}
+		return function[:slash+1+i]
+	}
+	return function
+}
+
+// isVersionTail reports whether s begins with a major-version segment like "v3" that belongs to
+// the package path rather than to the declaration that follows it.
+func isVersionTail(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+	i := 1
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	// at least one digit, and the version ends the segment (at a dot or the end of the symbol)
+	return i > 1 && (i == len(s) || s[i] == '.')
 }
