@@ -98,10 +98,12 @@ func TestLoopFlow(t *testing.T) {
 		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			replays++
 			sequence.Defer(ctx, func() { calls++ })
-			if replays == 1 {
-				return "", fmt.Errorf("%w: %w", step.ErrEvalFailed, replayErr)
-			}
-			return "test", nil
+			return step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				if replays == 1 {
+					return "", replayErr
+				}
+				return "test", nil
+			}), struct{}{})
 		}, &struct{}{})
 
 		assert.NoError(t, err)
@@ -118,11 +120,13 @@ func TestLoopFlow(t *testing.T) {
 		rval, err := loopAndAssertState(t,
 			ctx,
 			func(ctx context.Context, _ *struct{}) (string, error) {
-				fnCallCount++
-				if fnCallCount >= 2 {
-					return "result", nil
-				}
-				return "", fmt.Errorf("%w: %w", step.ErrEvalFailed, testErr)
+				return step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+					fnCallCount++
+					if fnCallCount >= 2 {
+						return "result", nil
+					}
+					return "", testErr
+				}), struct{}{})
 			},
 			&struct{}{},
 		)

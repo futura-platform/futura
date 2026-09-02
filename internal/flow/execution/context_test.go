@@ -395,6 +395,15 @@ func TestSettleSequence(t *testing.T) {
 			f.SettleSequence(ctx, -1, 1)
 		})
 	})
+	t.Run("panics if the call order does not end where the replay stopped", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := NewFlowExecutionWithContainer(c)
+
+		// the record is empty, but the replay claims to have recorded an entry
+		testutil.PanicsWithErrorIs(t, ErrSettledSequenceMismatch, func() {
+			f.SettleSequence(t.Context(), 0, 0)
+		})
+	})
 }
 
 func TestDurable(t *testing.T) {
