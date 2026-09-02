@@ -73,19 +73,27 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 	)
 	stateRef, persist := stateContext.Use(b)
 
-	setValue := func(value T) bool {
+	encode := func(value T) ([]byte, error) {
 		var buffer bytes.Buffer
 		encoder := privateencoding.NewEncoder[T](&buffer)
 		err := encoder.Encode(value)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
-		(*stateRef)[stateKey] = buffer.Bytes()
-		return persist()
+		return buffer.Bytes(), nil
+	}
+
+	write := func(value []byte) {
+		(*stateRef)[stateKey] = value
+		persist()
 	}
 
 	err := Effect(b, func(ctx context.Context, initialValue T) error {
-		setValue(initialValue)
+		value, err := encode(initialValue)
+		if err != nil {
+			return err
+		}
+		write(value)
 		return nil
 	}, initialValue)
 	if err != nil {
@@ -118,15 +126,22 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 			return value
 		},
 		setState: func(value T) {
-			if didChange := setValue(value); !didChange {
+			encoded, err := encode(value)
+			if err != nil {
+				panic(err)
+			}
+			if bytes.Equal((*stateRef)[stateKey], encoded) {
 				return
 			}
+
 			b = b.WithContext(
 				// setState is callable anywhere, so we need to temporarily bind to the current goroutine to allow the replay to restart.
 				goroutinebind.BindGoroutine(b),
 			)
-			// state changes are allowed cause the flow to change, so we don't want to panic in that case.
+
+			// state changes are allowed to cause the flow to change, so we don't want to panic in that case.
 			f.InvalidateSequence(b)
+			write(encoded)
 			f.RestartCurrentReplay(b, errors.New("state updated by setState"))
 		},
 	}
