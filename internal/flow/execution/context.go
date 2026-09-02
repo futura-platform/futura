@@ -154,8 +154,13 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	return sequence.With(replay.With(ctx), flags), dirtyEpoch
 }
 
+var ErrEpochRegression = errors.New("the evaluated epoch can never move backwards")
+
 func (f *FlowExecution) SettleSequence(ctx context.Context, atIndex int, toEpoch uint64) {
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+		if stored := f.getEpoch(tx, evaluatedEpochKey); stored > toEpoch {
+			panic(ftrerrors.InconsistentStateError(fmt.Errorf("%w: stored %d, settling to %d", ErrEpochRegression, stored, toEpoch)))
+		}
 		tx.TruncateCallOrderAt(atIndex)
 		f.setEpoch(tx, evaluatedEpochKey, toEpoch)
 	})

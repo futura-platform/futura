@@ -11,6 +11,7 @@ import (
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/goroutinebind"
+	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/futura-platform/futura/moment"
 	"github.com/petermattis/goid"
 	"github.com/stretchr/testify/assert"
@@ -381,6 +382,19 @@ func TestInvalidateSequence(t *testing.T) {
 
 	f.InvalidateSequence(ctx)
 	assert.Equal(t, uint64(2), getEpoch())
+}
+
+func TestSettleSequence(t *testing.T) {
+	t.Run("panics if the evaluated epoch would move backwards", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := NewFlowExecutionWithContainer(c)
+		ctx := t.Context()
+
+		f.SettleSequence(ctx, -1, 2)
+		testutil.PanicsWithErrorIs(t, ErrEpochRegression, func() {
+			f.SettleSequence(ctx, -1, 1)
+		})
+	})
 }
 
 func TestDurable(t *testing.T) {
