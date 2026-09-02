@@ -142,12 +142,12 @@ func TestCancelCurrentReplay(t *testing.T) {
 	ctx = WithFlow(ctx, running(t, NewFlowExecution()))
 	f := MustFromContext(ctx)
 	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNoCurrentReplay).Error(), func() {
-		f.restartCurrentReplay(ctx, errors.New("placeholder"))
+		f.RestartCurrentReplay(ctx, errors.New("placeholder"))
 	})
 
 	ctx = replay.With(ctx)
 	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
-		f.restartCurrentReplay(ctx, nil)
+		f.RestartCurrentReplay(ctx, nil)
 	})
 }
 
@@ -223,7 +223,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 
 		ctx = replay.With(ctx)
 		cancelCause := errors.New("placeholder")
-		f.restartCurrentReplay(ctx, cancelCause)
+		f.RestartCurrentReplay(ctx, cancelCause)
 
 		cause := context.Cause(ctx)
 		assert.ErrorIs(t, cause, ErrRestartReplay)
@@ -234,7 +234,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 		ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecution())), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNoCurrentReplay).Error(), func() {
-			f.restartCurrentReplay(ctx, nil)
+			f.RestartCurrentReplay(ctx, nil)
 		})
 	})
 	t.Run("no cancel cause case", func(t *testing.T) {
@@ -243,7 +243,7 @@ func TestRestartCurrentReplay(t *testing.T) {
 		f := MustFromContext(ctx)
 		ctx = replay.With(ctx)
 		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
-			f.restartCurrentReplay(ctx, nil)
+			f.RestartCurrentReplay(ctx, nil)
 		})
 	})
 }
@@ -376,10 +376,10 @@ func TestInvalidateSequence(t *testing.T) {
 		return epoch
 	}
 
-	f.InvalidateSequence(ctx, errors.New("placeholder"))
+	f.InvalidateSequence(ctx)
 	assert.Equal(t, uint64(1), getEpoch())
 
-	f.InvalidateSequence(ctx, errors.New("placeholder"))
+	f.InvalidateSequence(ctx)
 	assert.Equal(t, uint64(2), getEpoch())
 }
 

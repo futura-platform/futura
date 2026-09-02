@@ -87,10 +87,10 @@ var (
 	ErrRestartReplay = errors.New("restarting replay")
 )
 
-// restartCurrentReplay cancels the current replay, which will always start a new one.
+// RestartCurrentReplay cancels the current replay, which will always start a new one.
 // (Regardless of whether or not the last replay was successful).
 // This will also skip the default end of replay behavior, including rewinding the sequence index and resetting the replay flags.
-func (f *FlowExecution) restartCurrentReplay(ctx context.Context, cause error) {
+func (f *FlowExecution) RestartCurrentReplay(ctx context.Context, cause error) {
 	if !replay.Has(ctx) {
 		panic(ftrerrors.InconsistentStateError(ErrNoCurrentReplay))
 	} else if cause == nil {
@@ -167,12 +167,11 @@ func namespacedDurableKeyConstructor(namespace string) func(key string) string {
 	}
 }
 
-func (f *FlowExecution) InvalidateSequence(ctx context.Context, cause error) {
+func (f *FlowExecution) InvalidateSequence(ctx context.Context) {
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		epoch := f.getEpoch(tx, dirtyEpochKey)
 		f.setEpoch(tx, dirtyEpochKey, epoch+1)
 	})
-	f.restartCurrentReplay(ctx, cause)
 }
 
 func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.Identity, ok bool) {

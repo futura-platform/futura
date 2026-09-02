@@ -126,7 +126,8 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 				goroutinebind.BindGoroutine(b),
 			)
 			// state changes are allowed cause the flow to change, so we don't want to panic in that case.
-			f.InvalidateSequence(b, errors.New("state updated by setState"))
+			f.InvalidateSequence(b)
+			f.RestartCurrentReplay(b, errors.New("state updated by setState"))
 		},
 	}
 }
