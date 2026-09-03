@@ -583,6 +583,66 @@ func TestDurableHandle(t *testing.T) {
 }
 
 func TestDurableHandle_Cleanup(t *testing.T) {
+	t.Run("handles are cleaned up in reverse order of being provided", func(t *testing.T) {
+		var order []string
+		newHandle := func(name string) *DurableHandle[int] {
+			return NewDurableHandle[int](name,
+				func() *int { v := 0; return &v },
+				func(input []byte) (*int, error) { v := int(input[0]); return &v, nil },
+				func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
+				func(*int) error { order = append(order, name); return nil },
+			)
+		}
+		first, second, third := newHandle("first"), newHandle("second"), newHandle("third")
+
+		for range 20 { // an unordered cache would pass by chance on one run
+			order = nil
+			_, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+				b = first.Provide(b)
+				b = second.Provide(b)
+				b = third.Provide(b)
+				first.Use(b)
+				second.Use(b)
+				third.Use(b)
+				return 0, nil
+			}, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, []string{"third", "second", "first"}, order)
+		}
+	})
+
+	t.Run("handles can be provided from a goroutine bound to the execution", func(t *testing.T) {
+		a := NewPlainDurableHandle("providedFromGoroutine", func() *int { v := 0; return &v })
+		c := NewPlainDurableHandle("providedFromFlow", func() *int { v := 0; return &v })
+		cleanups := 0
+		aCleanup := NewDurableHandle[int]("providedFromGoroutineCleanup",
+			func() *int { v := 0; return &v },
+			func(input []byte) (*int, error) { v := int(input[0]); return &v, nil },
+			func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
+			func(*int) error { cleanups++; return nil },
+		)
+		_, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			return 0, Action(b, func(ctx context.Context) error {
+				var wg sync.WaitGroup
+				wg.Go(func() {
+					gctx, done := BindToGoroutine(ctx)
+					defer done()
+					ref, persist := a.Use(a.ProvideContext(gctx))
+					*ref = 1
+					persist()
+					aCleanup.Use(aCleanup.ProvideContext(gctx))
+				})
+				ref, persist := c.Use(c.ProvideContext(ctx))
+				*ref = 2
+				persist()
+				wg.Wait()
+				return nil
+			})
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, cleanups, "a handle provided from the goroutine is still cleaned up")
+	})
+
 	t.Run("runs once at the end of an execution when the handle is provided inside the flow", func(t *testing.T) {
 		cleanupCalls, replays := 0, 0
 		var cleaned *int

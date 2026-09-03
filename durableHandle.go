@@ -180,12 +180,12 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 	// either load the existing resolver, or create a new one.
 	// the cache cleans its resolvers up when the execution ends.
 	run := execution.MustFromContext(ctx).Run()
-	anyResolver, _ := handles.LoadOrCompute(d.key, func() (any, bool) {
+	anyResolver := handles.LoadOrCompute(d.key, func() any {
 		return &durableResolver[T]{
 			handleId: d.id,
 			cleanup:  d.cleanup,
 			run:      run,
-		}, false
+		}
 	})
 	return context.WithValue(ctx, d.key, anyResolver.(*durableResolver[T]))
 }
