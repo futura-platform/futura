@@ -3,13 +3,10 @@ package futura
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
-	"sync"
 
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/goroutinebind"
@@ -61,25 +58,16 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 		panic(ftrerrors.InconsistentStateError(err))
 	}
 
-	// Set is callable from any goroutine, so the value is loaded once and then guarded.
-	var mu sync.Mutex
-	var loaded bool
-	var value T
+	// V and Set are callable from any goroutine, so they bind to the caller's goroutine on each call.
 	load := func() T {
-		mu.Lock()
-		defer mu.Unlock()
-		if loaded {
-			return value
+		data, ok := f.ReadBehind(goroutinebind.BindGoroutine(b), stateKey)
+		if !ok {
+			return initialValue
 		}
-		data, ok := f.LoadDurable(goroutinebind.BindGoroutine(b), stateKey)
-		if ok {
-			if value, err = decodeState[T](data); err != nil {
-				panic(err)
-			}
-		} else {
-			value = initialValue
+		value, err := decodeState[T](data)
+		if err != nil {
+			panic(err)
 		}
-		loaded = true
 		return value
 	}
 
@@ -94,21 +82,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 				panic(err)
 			}
 
-			// The new value is only staged in memory here. It is committed durably, together with the
-			// sequence invalidation, when the next replay starts. This allows for multiple state changes to happen atomically, ensuring durability.
-			f.InvalidateSequence(
-				func() {
-					mu.Lock()
-					defer mu.Unlock()
-					value = newValue
-				},
-				func(tx executiontype.Container) {
-					if err := tx.StoreDurable(execution.GenericDurableKey(stateKey), encoded); err != nil {
-						panic(err)
-					}
-				},
-			)
-			f.RestartCurrentReplay(errors.New("state updated by setState"))
+			f.WriteBehind(stateKey, encoded)
 		},
 	}
 }

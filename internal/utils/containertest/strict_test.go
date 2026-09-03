@@ -21,7 +21,7 @@ func TestStrict(t *testing.T) {
 			return tx.StoreDurable("attempt", []byte{byte(attempt)})
 		})
 		assert.NoError(t, err)
-		assert.Equal(t, Attempts, r.Calls)
+		assert.Equal(t, int64(Attempts), r.Calls.Load())
 
 		value, ok, err := c.LoadDurable("attempt")
 		assert.NoError(t, err)
@@ -113,6 +113,6 @@ func TestStrict(t *testing.T) {
 		})
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, 0, calls)
-		assert.Equal(t, 0, r.Calls)
+		assert.Equal(t, int64(0), r.Calls.Load())
 	})
 }

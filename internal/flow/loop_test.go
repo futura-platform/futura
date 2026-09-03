@@ -167,8 +167,7 @@ func TestLoopFlow(t *testing.T) {
 		replays := 0
 		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			if replays == 0 {
-				f.InvalidateSequence(func() {}, func(executiontype.Container) {})
-				f.RestartCurrentReplay(errors.New("replay cancelled"))
+				f.WriteBehind("replay-cancelled", nil)
 			}
 			replays++
 			return fmt.Sprintf("success on replay %d", replays), nil
@@ -185,8 +184,7 @@ func TestLoopFlow(t *testing.T) {
 		rval, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
 			replays++
 			if replays == 1 {
-				f.InvalidateSequence(func() {}, func(executiontype.Container) {})
-				f.RestartCurrentReplay(errors.New("restarted"))
+				f.WriteBehind("restarted", nil)
 			}
 			if _, err := step.Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
 				return "", nil
@@ -248,8 +246,7 @@ func TestLoopFlow(t *testing.T) {
 
 			// the branch closes on replay 2, and reopens on replay 4. we must signal the change here
 			if replays == 2 || replays == 4 {
-				f.InvalidateSequence(func() {}, func(executiontype.Container) {})
-				f.RestartCurrentReplay(errors.New("skipping the branch on this replay"))
+				f.WriteBehind("skipping-the-branch-on-this-replay", nil)
 			}
 			// skip the step on the second+third replay to allow the invalidation to settle, then to actually skip the branch
 			if replays != 2 && replays != 3 {
@@ -394,8 +391,7 @@ func TestLoopFlow(t *testing.T) {
 				return "", err
 			}
 
-			f.InvalidateSequence(func() {}, func(executiontype.Container) {})
-			f.RestartCurrentReplay(errors.New("restart to enter new branch"))
+			f.WriteBehind("restart-to-enter-new-branch", nil)
 			return "", nil
 		}, &struct{}{})
 		assert.NoError(t, err)
@@ -428,8 +424,7 @@ func TestLoopFlow(t *testing.T) {
 				if err := evaluate(ctx, "third call"); err != nil {
 					return "", err
 				}
-				f.InvalidateSequence(func() {}, func(executiontype.Container) {})
-				f.RestartCurrentReplay(errors.New("closing the branch"))
+				f.WriteBehind("closing-the-branch", nil)
 				return "", nil
 			}
 			return "done", nil
@@ -461,8 +456,7 @@ func TestLoopFlow(t *testing.T) {
 					return "", err
 				}
 				if replays == 1 {
-					f.InvalidateSequence(func() {}, func(executiontype.Container) {})
-					f.RestartCurrentReplay(errors.New("state change"))
+					f.WriteBehind("state-change", nil)
 					return "", nil
 				}
 				return "", exit(ctx, cancel)

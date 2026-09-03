@@ -452,6 +452,42 @@ func TestState(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
 	})
+	t.Run("a state container held from a previous execution reads the current value", func(t *testing.T) {
+		// A container is a view of the durable value, not a copy of it: held across executions it
+		// must see what the flow has since committed, and a Set to the current value stays a no-op.
+		var held futura.StateContainer[int]
+		run, replays := 0, 0
+		var heldSaw []int
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			replays++
+			a := futura.State(b, 0)
+			if run == 1 {
+				held = a
+			}
+			if run == 2 {
+				if a.V() == 0 {
+					a.Set(5)
+					return 0, nil
+				}
+				heldSaw = append(heldSaw, held.V())
+				held.Set(5)
+				return a.V(), nil
+			}
+			return a.V(), nil
+		}
+		f := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory())
+
+		run = 1
+		_, err := f.Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+
+		run, replays = 2, 0
+		r, err := f.Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 5, r)
+		assert.Equal(t, []int{5}, heldSaw)
+		assert.Equal(t, 2, replays, "a Set to the current value through the held container is a no-op")
+	})
 	t.Run("a state change with no replay running is applied by the next replay to start", func(t *testing.T) {
 		var held futura.StateContainer[int]
 		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {

@@ -3,6 +3,7 @@ package containertest
 import (
 	"context"
 	"iter"
+	"sync/atomic"
 
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/moment"
@@ -19,7 +20,7 @@ type Strict struct {
 	// to model the conflicting state that caused the retry.
 	StaleView func(tx executiontype.Container)
 	// Calls counts closure invocations across all transactions.
-	Calls int
+	Calls atomic.Int64
 }
 
 var _ executiontype.TransactionalContainer = &Strict{}
@@ -44,7 +45,7 @@ func (s *Strict) Transact(ctx context.Context, fn func(ctx context.Context, tx e
 		if err := s.discard(ctx, tx, func(ctx context.Context, view *overlay) error { return fn(ctx, view) }); err != nil {
 			return err
 		}
-		s.Calls++
+		s.Calls.Add(1)
 		return fn(ctx, tx)
 	})
 }
@@ -57,7 +58,7 @@ func (s *Strict) ReadTransact(ctx context.Context, fn func(ctx context.Context, 
 		if err := s.discard(ctx, tx, func(ctx context.Context, view *overlay) error { return fn(ctx, view) }); err != nil {
 			return err
 		}
-		s.Calls++
+		s.Calls.Add(1)
 		return fn(ctx, tx)
 	})
 }
@@ -65,7 +66,7 @@ func (s *Strict) ReadTransact(ctx context.Context, fn func(ctx context.Context, 
 // discard runs fn against a throwaway view of tx for every attempt but the last.
 func (s *Strict) discard(ctx context.Context, tx executiontype.ReadOnlyContainer, fn func(ctx context.Context, view *overlay) error) error {
 	for range Attempts - 1 {
-		s.Calls++
+		s.Calls.Add(1)
 		view := newOverlay(tx)
 		if s.StaleView != nil {
 			s.StaleView(view)

@@ -3,10 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/binary"
-	"errors"
-	"slices"
 	"testing"
-	"time"
 
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
@@ -141,13 +138,6 @@ func TestGetFlowContext_WrongGoroutine(t *testing.T) {
 	})
 }
 
-func TestCancelCurrentReplay(t *testing.T) {
-	f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
-	assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
-		f.RestartCurrentReplay(nil)
-	})
-}
-
 func TestExpectedIdentity(t *testing.T) {
 	t.Run("has expected call", func(t *testing.T) {
 		ctx := t.Context()
@@ -212,17 +202,16 @@ func TestGetMoment(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestRestartCurrentReplay(t *testing.T) {
+func TestWriteBehind_RestartsTheCurrentReplay(t *testing.T) {
 	t.Run("cancels the current replay with the restart cause", func(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 
-		cancelCause := errors.New("placeholder")
-		f.RestartCurrentReplay(cancelCause)
+		f.WriteBehind("key", nil)
 
 		cause := context.Cause(replayCtx)
 		assert.ErrorIs(t, cause, ErrRestartReplay)
-		assert.ErrorIs(t, cause, cancelCause)
+		assert.ErrorIs(t, cause, ErrWrittenBehind)
 	})
 	t.Run("cancels the replay that is current now, not one that was current when the caller started", func(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
@@ -230,28 +219,39 @@ func TestRestartCurrentReplay(t *testing.T) {
 		replay.Cancel(first, nil)
 		second, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 
-		f.RestartCurrentReplay(errors.New("from a holder of the first replay"))
+		f.WriteBehind("key", nil)
 		assert.ErrorIs(t, context.Cause(second), ErrRestartReplay)
 		assert.NotErrorIs(t, context.Cause(first), ErrRestartReplay)
 	})
-	t.Run("is a no-op before any replay has started", func(t *testing.T) {
+	t.Run("does not need a replay to restart", func(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
-		assert.NotPanics(t, func() { f.RestartCurrentReplay(errors.New("nothing to restart")) })
+		assert.NotPanics(t, func() { f.WriteBehind("key", nil) })
 	})
-	t.Run("is a no-op after the current replay has ended", func(t *testing.T) {
+	t.Run("does not restart a replay that has already ended", func(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 		replay.Cancel(replayCtx, nil)
 
-		f.RestartCurrentReplay(errors.New("after the replay ended"))
+		f.WriteBehind("key", nil)
 		// cancellation is idempotent: the first cause stands
 		assert.NotErrorIs(t, context.Cause(replayCtx), ErrRestartReplay)
 	})
-	t.Run("panics without a cause", func(t *testing.T) {
+	t.Run("restarts before the value can be read, so nothing on the old replay can act on it", func(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
-		assert.PanicsWithError(t, ftrerrors.InconsistentStateError(ErrNilCancellationCause).Error(), func() {
-			f.RestartCurrentReplay(nil)
-		})
+		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
+
+		// observe the write from another goroutine the instant it lands
+		seen := make(chan bool)
+		go func() {
+			for {
+				if _, ok := f.ReadBehind(WithFlow(t.Context(), f), "key"); ok {
+					seen <- replayCtx.Err() != nil
+					return
+				}
+			}
+		}()
+		f.WriteBehind("key", []byte{1})
+		assert.True(t, <-seen, "the replay must already be cancelled when the value becomes readable")
 	})
 }
 
@@ -310,7 +310,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 
 		f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
 
-		assert.Equal(t, containertest.Attempts, strict.Calls, "the closure should have run once per attempt")
+		assert.Equal(t, int64(containertest.Attempts), strict.Calls.Load(), "the closure should have run once per attempt")
 		assert.Equal(t, 1, c.CallOrderLength(), "recorded exactly once")
 		assert.True(t, c.HasMoment(recordKey))
 		assert.True(t, sequence.IsSeen(ctx, recordKey))
@@ -383,7 +383,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 	})
 }
 
-func TestInvalidateSequence(t *testing.T) {
+func TestWriteBehind(t *testing.T) {
 	getEpoch := func(t *testing.T, c *executiontype.InMemoryContainer) uint64 {
 		t.Helper()
 		encoded, ok, err := c.LoadDurable(dirtyEpochKey)
@@ -396,57 +396,87 @@ func TestInvalidateSequence(t *testing.T) {
 		assert.NoError(t, err)
 		return epoch
 	}
+	stored := func(t *testing.T, c *executiontype.InMemoryContainer, key string) ([]byte, bool) {
+		t.Helper()
+		value, ok, err := c.LoadDurable(GenericDurableKey(key))
+		assert.NoError(t, err)
+		return value, ok
+	}
 	startReplay := func(t *testing.T, f *FlowExecution) (dirtyEpoch uint64) {
 		t.Helper()
 		_, dirtyEpoch = f.StartNewReplay(WithFlow(t.Context(), f))
 		return dirtyEpoch
 	}
 
-	t.Run("the mutation is applied immediately, but nothing is written until the next replay starts", func(t *testing.T) {
+	t.Run("the value is readable immediately, but nothing is written until the next replay starts", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
+		ctx := WithFlow(t.Context(), f)
 
-		applied, writes := false, 0
-		f.InvalidateSequence(func() { applied = true }, func(executiontype.Container) { writes++ })
-		assert.True(t, applied)
+		f.WriteBehind("key", []byte{1})
+		value, ok := f.ReadBehind(ctx, "key")
+		assert.True(t, ok)
+		assert.Equal(t, []byte{1}, value)
+		_, ok = f.LoadDurable(ctx, "key")
+		assert.False(t, ok, "LoadDurable reads the container only")
+		_, ok = stored(t, c, "key")
+		assert.False(t, ok)
 		assert.Equal(t, uint64(0), getEpoch(t, c))
-		assert.Equal(t, 0, writes)
 
 		dirtyEpoch := startReplay(t, f)
+		value, ok = stored(t, c, "key")
+		assert.True(t, ok)
+		assert.Equal(t, []byte{1}, value)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
-		assert.Equal(t, containertest.Attempts, writes, "the write runs on every attempt of the committing transaction")
-		// the replay that committed the invalidation was started against the bumped epoch
+		// the replay that flushed the write was started against the bumped epoch
 		assert.Equal(t, uint64(1), dirtyEpoch)
 	})
-	t.Run("every pending write is committed in one transaction with a single epoch bump", func(t *testing.T) {
+	t.Run("every dirty value is flushed in one transaction with a single epoch bump", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
-		var order []string
-		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
-			order = append(order, "first")
-			assert.NoError(t, tx.StoreDurable("first", []byte{1}))
-		})
-		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
-			order = append(order, "second")
-			assert.NoError(t, tx.StoreDurable("second", []byte{2}))
-		})
+		f.WriteBehind("first", []byte{1})
+		f.WriteBehind("second", []byte{2})
 		startReplay(t, f)
 
-		// every attempt runs the writes in order
-		assert.Equal(t, slices.Repeat([]string{"first", "second"}, containertest.Attempts), order)
-		for _, key := range []string{"first", "second"} {
-			_, ok, err := c.LoadDurable(key)
-			assert.NoError(t, err)
+		for key, expected := range map[string][]byte{"first": {1}, "second": {2}} {
+			value, ok := stored(t, c, key)
 			assert.True(t, ok, key)
+			assert.Equal(t, expected, value, key)
 		}
 		assert.Equal(t, uint64(1), getEpoch(t, c))
 	})
-	t.Run("a replay started with nothing pending does not bump the epoch", func(t *testing.T) {
+	t.Run("the latest write to a key wins", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
+		ctx := WithFlow(t.Context(), f)
+
+		f.WriteBehind("key", []byte{1})
+		f.WriteBehind("key", []byte{2})
+		value, _ := f.ReadBehind(ctx, "key")
+		assert.Equal(t, []byte{2}, value)
+
+		startReplay(t, f)
+		value, _ = stored(t, c, "key")
+		assert.Equal(t, []byte{2}, value)
+	})
+	t.Run("a flushed value is read from the container afterwards", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
+		ctx := WithFlow(t.Context(), f)
+
+		f.WriteBehind("key", []byte{1})
+		startReplay(t, f)
+		assert.NoError(t, c.StoreDurable(GenericDurableKey("key"), []byte{9}))
+
+		value, _ := f.ReadBehind(ctx, "key")
+		assert.Equal(t, []byte{9}, value, "nothing is dirty after the flush, so the container is authoritative")
+	})
+	t.Run("a replay started with nothing dirty does not bump the epoch", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
-		f.InvalidateSequence(func() {}, func(executiontype.Container) {})
+		f.WriteBehind("key", nil)
 		startReplay(t, f)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
 
@@ -454,24 +484,18 @@ func TestInvalidateSequence(t *testing.T) {
 		startReplay(t, f)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
 	})
-	t.Run("committing survives the container retrying the transaction", func(t *testing.T) {
+	t.Run("flushing survives the container retrying the transaction", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		strict := containertest.NewStrict(c)
 		f := running(t, NewFlowExecutionWithContainer(strict))
 
-		writes := 0
-		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
-			writes++
-			assert.NoError(t, tx.StoreDurable("value", []byte{1}))
-		})
+		f.WriteBehind("key", []byte{1})
 		dirtyEpoch := startReplay(t, f)
 
-		assert.Equal(t, containertest.Attempts, strict.Calls, "the closure should have run once per attempt")
-		assert.Equal(t, containertest.Attempts, writes, "the write runs on every attempt, against a fresh transaction")
+		assert.Equal(t, int64(containertest.Attempts), strict.Calls.Load(), "the closure should have run once per attempt")
 		assert.Equal(t, uint64(1), getEpoch(t, c), "but the epoch is bumped exactly once")
 		assert.Equal(t, uint64(1), dirtyEpoch)
-		_, ok, err := c.LoadDurable("value")
-		assert.NoError(t, err)
+		_, ok := stored(t, c, "key")
 		assert.True(t, ok)
 	})
 	t.Run("the replay's flags come from the attempt that committed, not an earlier one", func(t *testing.T) {
@@ -488,40 +512,7 @@ func TestInvalidateSequence(t *testing.T) {
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 		assert.True(t, sequence.GetFlags(replayCtx).PanicOnMomentOrderChange)
 	})
-	t.Run("a replay cannot start between a mutation being applied and its invalidation being recorded", func(t *testing.T) {
-		c := executiontype.NewInMemoryContainer()
-		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
-
-		applied := make(chan struct{})
-		release := make(chan struct{})
-		invalidated := make(chan struct{})
-		go func() {
-			defer close(invalidated)
-			f.InvalidateSequence(func() {
-				close(applied)
-				<-release // hold the lock with the mutation applied but the invalidation not yet recorded
-			}, func(executiontype.Container) {})
-		}()
-		<-applied
-
-		started := make(chan replay.Flags)
-		go func() {
-			replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
-			started <- sequence.GetFlags(replayCtx)
-		}()
-
-		select {
-		case <-started:
-			t.Fatal("a replay started while a mutation was applied but not yet invalidated")
-		case <-time.After(50 * time.Millisecond):
-		}
-
-		close(release)
-		<-invalidated
-		flags := <-started
-		assert.False(t, flags.PanicOnMomentOrderChange, "the replay that started after the invalidation must be relaxed")
-	})
-	t.Run("an invalidation recorded between runs is committed by the next run's first replay", func(t *testing.T) {
+	t.Run("a write between runs is flushed by the next run's first replay", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := NewFlowExecutionWithContainer(containertest.NewStrict(c))
 
@@ -529,7 +520,7 @@ func TestInvalidateSequence(t *testing.T) {
 		assert.True(t, ok)
 		stop()
 
-		f.InvalidateSequence(func() {}, func(executiontype.Container) {})
+		f.WriteBehind("key", []byte{1})
 		assert.Equal(t, uint64(0), getEpoch(t, c))
 
 		stop, ok = f.TryStartRun()
@@ -537,6 +528,8 @@ func TestInvalidateSequence(t *testing.T) {
 		defer stop()
 		startReplay(t, f)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
+		_, ok = stored(t, c, "key")
+		assert.True(t, ok)
 	})
 }
 
@@ -551,7 +544,7 @@ func TestSettleSequence(t *testing.T) {
 
 		f.SettleSequence(t.Context(), 1, 4)
 
-		assert.Equal(t, containertest.Attempts, strict.Calls, "the closure should have run once per attempt")
+		assert.Equal(t, int64(containertest.Attempts), strict.Calls.Load(), "the closure should have run once per attempt")
 		assert.Equal(t, 2, c.CallOrderLength(), "truncated to the recorded index exactly once")
 		encoded, ok, err := c.LoadDurable(evaluatedEpochKey)
 		assert.NoError(t, err)
