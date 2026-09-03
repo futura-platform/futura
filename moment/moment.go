@@ -1,22 +1,44 @@
 package moment
 
-import "github.com/samber/mo"
+import (
+	"bytes"
+
+	"github.com/futura-platform/futura/privateencoding"
+	"github.com/samber/mo"
+)
 
 // A Moment represents an Fn instance and its returned successful output at a specific point in time.
 // This is separate from the actual Identifier of the specific point in time. That is represented by Identity.
 type Moment struct {
-	input  any
-	output mo.Option[any]
+	input any
+	// record the encoded format for comparison, so we don't have to re encode it every time
+	encodedInput []byte
+	output       mo.Option[any]
 }
 
 func NewMoment[A comparable](input A) *Moment {
-	return &Moment{input: input}
+	return &Moment{input: input, encodedInput: encodeInput(input)}
 }
 
 // Validate reports whether the moment can be reused for the current replay.
 // A moment is reusable when the input is unchanged and it still has a valid output.
 func (m Moment) Validate(input any) (valid bool) {
-	return m.input == input && m.output.IsSome()
+	if !m.output.IsSome() {
+		return false
+	}
+	if m.input == input {
+		return true
+	}
+	return m.encodedInput != nil && bytes.Equal(m.encodedInput, encodeInput(input))
+}
+
+// encodeInput encodes an input for comparison, or returns nil if it cannot be encoded.
+func encodeInput(input any) []byte {
+	var buf bytes.Buffer
+	if err := privateencoding.NewEncoder[any](&buf).Encode(input); err != nil {
+		return nil
+	}
+	return buf.Bytes()
 }
 
 func (m Moment) Output() mo.Option[any] {

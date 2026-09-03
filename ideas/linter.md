@@ -65,3 +65,20 @@ futura.Step(b, fn, struct{}{})
 futura.Step(b, run, n)              // yes: n is an arg, part of the memo
 futura.Step(b.WithKey(id), fn, ...) // yes: id keys the moment
 ```
+
+## Step inputs and state values should be comparable by `==`
+
+The runtime compares a step's memoized input, and a state's current value, with `==` first. That is
+the fast path on every replay. When `==` says "different", it falls back to comparing the encoded
+bytes, so values that `==` cannot compare correctly (pointers, which are fresh on every replay; NaN,
+which is never equal to itself) still hit their memo. The fallback is correct but costs an encode of
+both values on every replay, so it is a performance concern, not a correctness one.
+
+```go
+futura.Step(b, fn, &cfg)          // works, but re-encodes cfg on every replay to prove it is unchanged
+futura.Step(b, fn, cfg)           // yes: == answers on the fast path
+futura.State(b, math.NaN())       // works via the fallback; avoid if the value can be represented otherwise
+```
+
+Flag pointer-typed and interface-typed step inputs and state types, and float fields that can carry NaN,
+as "will always take the slow comparison". Do not treat them as errors.

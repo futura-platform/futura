@@ -14,6 +14,7 @@ import (
 
 	"github.com/vmihailenco/msgpack/v5"
 
+	mapset "github.com/deckarep/golang-set/v2"
 	privateencodinginternal "github.com/futura-platform/futura/privateencoding/internal"
 )
 
@@ -24,13 +25,28 @@ type Encoder[T any] struct {
 	// msgpackEncoder is used as a fast path for primitive leaf values
 	// (ints, floats, bools, strings, []byte) at any depth.
 	msgpackEncoder *msgpack.Encoder
+	// record the visited pointers, so we can detect cycles
+	visiting mapset.Set[uintptr]
 }
 
 func NewEncoder[T any](w io.Writer) *Encoder[T] {
 	return &Encoder[T]{
 		w:              w,
 		msgpackEncoder: msgpack.NewEncoder(w),
+		visiting:       mapset.NewThreadUnsafeSet[uintptr](),
 	}
+}
+
+var ErrCyclicValue = errors.New("cyclic value")
+
+// enter marks the pointer v as being encoded, and returns the func that unmarks it.
+// It reports an error if v is already on the path being encoded.
+func (e *Encoder[T]) enter(v reflect.Value, path string) (leave func(), err error) {
+	address := v.Pointer()
+	if !e.visiting.Add(address) {
+		return nil, encodePathError(path, ErrCyclicValue)
+	}
+	return func() { e.visiting.Remove(address) }, nil
 }
 
 func (e *Encoder[T]) Encode(data T) error {
@@ -236,6 +252,11 @@ func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
 	switch v.Kind() {
 	case reflect.Pointer:
 		return e.encodeNillable(v, path, func(v reflect.Value) error {
+			leave, err := e.enter(v, path)
+			if err != nil {
+				return err
+			}
+			defer leave()
 			return e.encodeValue(
 				v.Elem(), "(*"+path+")",
 			)
@@ -249,6 +270,11 @@ func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
 		return nil
 	case reflect.Slice:
 		return e.encodeNillable(v, path, func(v reflect.Value) error {
+			leave, err := e.enter(v, path)
+			if err != nil {
+				return err
+			}
+			defer leave()
 			l := v.Len()
 			if err := e.mustEncodeSimple(l); err != nil {
 				return encodePathError("len("+path+")", err)
@@ -262,6 +288,11 @@ func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
 		})
 	case reflect.Map:
 		return e.encodeNillable(v, path, func(v reflect.Value) error {
+			leave, err := e.enter(v, path)
+			if err != nil {
+				return err
+			}
+			defer leave()
 			if err := e.mustEncodeSimple(v.Len()); err != nil {
 				return encodePathError("len("+path+")", err)
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 
@@ -120,6 +121,39 @@ func TestState(t *testing.T) {
 			return state.V(), nil
 		}, struct{}{})
 		assert.Equal(t, 1, replays)
+	})
+	t.Run("setState of a value that is not equal to itself does not trigger a replay", func(t *testing.T) {
+		// NaN != NaN, so == alone would see every Set as a change and restart the replay forever
+		replays := 0
+		r, err := futura.NewFlowFromContainer[struct{}, float64](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (float64, error) {
+			replays++
+			state := futura.State(b, 0.0)
+			state.Set(math.NaN())
+			state.Set(math.NaN())
+			return state.V(), nil
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.True(t, math.IsNaN(r))
+		assert.Equal(t, 2, replays)
+	})
+	t.Run("a step with a pointer input is memoized across replays", func(t *testing.T) {
+		type cfg struct{ N int }
+		executions, replays := 0, 0
+		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			replays++
+			// a fresh pointer every replay, as pure code naturally produces
+			v, err := futura.Step(b, func(ctx context.Context, c *cfg) (int, error) { executions++; return c.N, nil }, &cfg{N: 7})
+			if err != nil {
+				return 0, err
+			}
+			if replays < 3 {
+				return 0, futura.Action(b, func(ctx context.Context) error { return errors.New("retry") })
+			}
+			return v, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 3, replays)
+		assert.Equal(t, 1, executions)
 	})
 	t.Run("setState updates the state and immediately triggers a replay for a new value", func(t *testing.T) {
 		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {

@@ -2,20 +2,10 @@ package privateencoding
 
 import "reflect"
 
-// locker matches the method set used by the standard library to mark lock-like
-// types (e.g. sync.Mutex, sync.RWMutex). We intentionally define it locally to
-// avoid pulling in additional dependencies just for reflect.Type checks.
-type locker interface {
-	Lock()
-	Unlock()
-}
-
-var lockerType = reflect.TypeOf((*locker)(nil)).Elem()
-
+// isNoCopyStructType reports whether t is one of the standard library's synchronization
+// primitives (sync.Mutex, sync.RWMutex, sync.Once, ...). Their fields are runtime state, not
+// logical state, so they are skipped. Only the primitive itself is skipped: a struct that embeds
+// one still encodes its own fields.
 func isNoCopyStructType(t reflect.Type) bool {
-	if t.Kind() != reflect.Struct {
-		return false
-	}
-	// Most lock types implement the methods on the pointer receiver.
-	return t.Implements(lockerType) || reflect.PointerTo(t).Implements(lockerType)
+	return t.Kind() == reflect.Struct && t.PkgPath() == "sync"
 }

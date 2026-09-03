@@ -58,27 +58,36 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 	}
 
 	// V and Set are callable from any goroutine, so they bind to the caller's goroutine on each call.
-	load := func() T {
+	read := func() (data []byte, value T) {
 		data, ok := f.ReadBehind(goroutinebind.BindGoroutine(b), stateKey)
 		if !ok {
-			return initialValue
+			return nil, initialValue
 		}
 		value, err := decodeState[T](data)
 		if err != nil {
 			panic(err)
 		}
-		return value
+		return data, value
 	}
 
 	return stateContainerImplementation[T]{
-		getValue: load,
+		getValue: func() T {
+			_, value := read()
+			return value
+		},
 		setState: func(newValue T) {
-			if load() == newValue {
+			current, value := read()
+			if value == newValue {
 				return
 			}
 			encoded, err := encodeState(newValue)
 			if err != nil {
 				panic(err)
+			}
+			// slow path comparison, do this to cover values like
+			// NaN and pointers having funky equality rules before serialization
+			if current != nil && bytes.Equal(current, encoded) {
+				return
 			}
 
 			f.WriteBehind(stateKey, encoded)
