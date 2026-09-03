@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
@@ -70,6 +72,27 @@ func TestStep(t *testing.T) {
 			assert.Len(t, errs, 1)
 			assert.ErrorIs(t, errs[0], context.DeadlineExceeded)
 		})
+	})
+	t.Run("a step evaluated from inside another step is rejected", func(t *testing.T) {
+		c := executiontype.NewInMemoryContainer()
+		nest := true
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			return futura.Step(b, func(ctx context.Context, _ struct{}) (int, error) {
+				if nest {
+					return futura.Step(b.WithContext(ctx), func(ctx context.Context, _ struct{}) (int, error) { return 0, nil }, struct{}{})
+				}
+				return 1, nil
+			}, struct{}{})
+		}
+		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, step.ErrNestedStep)
+
+		// only the outer step's slot was recorded, so a corrected flow resumes cleanly over it
+		nest = false
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r)
 	})
 	t.Run("a step re-executed with a new input memoizes that input, not the original one", func(t *testing.T) {
 		replays := 0

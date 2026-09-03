@@ -237,6 +237,31 @@ func TestStep(t *testing.T) {
 		})
 	})
 
+	t.Run("panics if evaluated from inside another step", func(t *testing.T) {
+		// A step's fn receives a flow context, so a nested Step would evaluate at the outer step's
+		// index and record ahead of it, leaving a call order that no later replay can follow.
+		innerRan, outerRecorded := false, false
+		_, err := replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
+			f := execution.MustFromContext(ctx)
+			ctx, _ = f.StartNewReplay(ctx)
+
+			testutil.PanicsWithErrorIs(t, ErrNestedStep, func() {
+				Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+					Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+						innerRan = true
+						return "", nil
+					}), struct{}{})
+					return "", nil
+				}), struct{}{})
+			})
+			_, outerRecorded = f.ExpectedIdentity(ctx)
+			return "success", nil
+		}, nil)
+		assert.NoError(t, err)
+		assert.False(t, innerRan)
+		assert.False(t, outerRecorded, "nothing may be recorded for a step that panicked")
+	})
+
 	t.Run("terminates without executing if the replay is cancelled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(runningFlowCtx(t))
 		executed := false

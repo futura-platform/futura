@@ -21,6 +21,7 @@ import (
 
 var (
 	ErrEvaledOutsideOfAFlowFunction = errors.New("steps cannot be evaluated outside of a replay function")
+	ErrNestedStep                   = errors.New("steps cannot be evaluated from inside another step")
 	ErrUnexpectedBranchTaken        = errors.New("unexpected branch taken, new branches should only be triggered by a futura state change")
 )
 
@@ -61,6 +62,10 @@ func evaluateWithCallstack[A comparable, R any](
 ) (output R, err error) {
 	// if the replay is cancelled, terminate it immediately
 	terminateIfReplayCancelled(ctx)
+	// a step is a leaf of the flow: evaluated from inside another step, it would record at that step's index
+	if moment.IsEvaluating(ctx) {
+		panic(ftrerrors.InconsistentStateError(ErrNestedStep))
+	}
 	identity := moment.NewIdentity(
 		ctx,
 		replay.CallstackToCallpath(callstack),

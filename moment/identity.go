@@ -78,3 +78,9 @@ func CurrentIdentity(ctx context.Context) Identity {
 	}
 	return identity
 }
+
+// IsEvaluating reports whether ctx belongs to a moment function that is currently executing.
+func IsEvaluating(ctx context.Context) bool {
+	_, ok := ctx.Value(currentIdentityKey{}).(Identity)
+	return ok
+}
