@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/futura-platform/futura"
@@ -23,7 +24,7 @@ func serpMonitorFlow(b futura.FlowBuilder, term string) ([]serpEntry, error) {
 
 	var lastRankings seal.Sealed[serpRankings]
 	for i := 0; ; func() { i++; time.Sleep(time.Second) }() {
-		b := b.WithKey(i)
+		b := b.WithKey(strconv.Itoa(i))
 		newRankings, err := futura.Step(b, fetchRankings, fetchRankingsParams{
 			term:         term,
 			sessionValid: sessionValid.V(),
