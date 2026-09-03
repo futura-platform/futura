@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/fopt"
@@ -65,6 +66,26 @@ func TestWithMaxFailures(t *testing.T) {
 		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
 	})
 
+	t.Run("a state change made in response to the cancellation does not restart the flow", func(t *testing.T) {
+		// Reaching the limit ends the flow. A flow that records the failure in a state (which restarts
+		// the replay) must still end, otherwise every replay reaches the limit again and it never does.
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+		replays := 0
+		_, err := futura.NewFlowFromContainer[any, any](containertest.NewInMemory()).Execute(ctx, func(b futura.FlowBuilder, args any) (any, error) {
+			replays++
+			failures := futura.State(b, 0)
+			err := futura.Action(b, func(ctx context.Context) error { return errors.New("always") })
+			if err != nil {
+				failures.Set(failures.V() + 1)
+				return nil, err
+			}
+			return nil, nil
+		}, nil, fopt.WithMaxFailures(2))
+		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
+		require.NotErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, 3, replays)
+	})
 	t.Run("a cancellation that lands during a step is not counted as a failure", func(t *testing.T) {
 		container := executiontype.NewInMemoryContainer()
 		var cancelDuringStep context.CancelFunc
