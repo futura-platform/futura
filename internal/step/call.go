@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 
+	"github.com/futura-platform/futura/internal/flow/replay"
 	stepwrapper "github.com/futura-platform/futura/internal/step/wrapper"
 	"github.com/futura-platform/futura/moment"
 )
@@ -29,7 +30,7 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 		}
 		if err != nil {
 			// only check for the termination condition if the step did not exit successfully.
-			terminateIfCancelled(ctx)
+			terminateIfReplayCancelled(ctx)
 		}
 		return output, err
 	}
@@ -58,8 +59,8 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 // propagate the error through user code.
 var ErrReplayTerminated = errors.New("replay terminated")
 
-func terminateIfCancelled(ctx context.Context) {
-	if ctx.Err() != nil {
+func terminateIfReplayCancelled(ctx context.Context) {
+	if replay.Err(ctx) != nil {
 		panic(ErrReplayTerminated)
 	}
 }

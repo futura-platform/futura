@@ -237,11 +237,12 @@ func TestStep(t *testing.T) {
 		})
 	})
 
-	t.Run("terminates without executing if the context is done", func(t *testing.T) {
+	t.Run("terminates without executing if the replay is cancelled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(runningFlowCtx(t))
-		cancel()
 		executed := false
 		terminatedWith := replayTerminatedWith(t, ctx, func(ctx context.Context) {
+			ctx, _ = execution.MustFromContext(ctx).StartNewReplay(ctx)
+			cancel() // the outer context: the replay is cancelled through it
 			Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (any, error) {
 				executed = true
 				return nil, nil
@@ -249,6 +250,23 @@ func TestStep(t *testing.T) {
 		})
 		assert.ErrorIs(t, terminatedWith, ErrReplayTerminated)
 		assert.False(t, executed)
+	})
+
+	t.Run("does not terminate for a context the flow derived and cancelled itself", func(t *testing.T) {
+		result, err := replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
+			ctx, _ = execution.MustFromContext(ctx).StartNewReplay(ctx)
+			derived, cancel := context.WithCancel(ctx)
+			cancel()
+
+			_, err := Evaluate(derived, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
+				return "", ctx.Err()
+			}), struct{}{})
+			assert.ErrorIs(t, err, ErrEvalFailed)
+			assert.ErrorIs(t, err, context.Canceled)
+			return "success", nil
+		}, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, "success", result)
 	})
 
 	t.Run("terminates before evaluating if the replay was restarted", func(t *testing.T) {

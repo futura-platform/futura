@@ -6,11 +6,19 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/futura-platform/futura/internal/flow/replay"
 	stepwrapper "github.com/futura-platform/futura/internal/step/wrapper"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
+
+// replayCtx returns a context inside a replay, which call needs to tell a cancelled replay from a cancelled step.
+func replayCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, _ := replay.With(t.Context())
+	return ctx
+}
 
 func TestCall(t *testing.T) {
 	t.Run("calls the fn without a wrapper, returning the result and error", func(t *testing.T) {
@@ -20,7 +28,7 @@ func TestCall(t *testing.T) {
 			callCount++
 			return "result", expectedError
 		})
-		output, err := call(t.Context(), fn, moment.Identity{}, struct{}{}, nil)
+		output, err := call(replayCtx(t), fn, moment.Identity{}, struct{}{}, nil)
 		assert.Equal(t, "result", output)
 		assert.ErrorIs(t, err, expectedError)
 		assert.Equal(t, 1, callCount)
@@ -31,7 +39,7 @@ func TestCall(t *testing.T) {
 		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
 			return "result", expectedError
 		})
-		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		ctx := stepwrapper.With(replayCtx(t), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			return nil
 		})
 		testutil.PanicsWithErrorIs(t, ErrDidNotCall, func() {
@@ -46,7 +54,7 @@ func TestCall(t *testing.T) {
 			callCount++
 			return "result", expectedError
 		})
-		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		ctx := stepwrapper.With(replayCtx(t), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			call()
 			call()
 			return nil
@@ -67,7 +75,7 @@ func TestCall(t *testing.T) {
 		var wrapperReceivedLabel string
 		var wrapperReceivedOutput any
 		var wrapperReceivedError error
-		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		ctx := stepwrapper.With(replayCtx(t), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			wrapperCallCount++
 			wrapperReceivedLabel = fnLabel
 			wrapperReceivedOutput, wrapperReceivedError = call()
@@ -88,7 +96,7 @@ func TestCall(t *testing.T) {
 		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
 			return "result", errors.New("unexpected error")
 		})
-		ctx := stepwrapper.With(t.Context(), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+		ctx := stepwrapper.With(replayCtx(t), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			call()
 			return expectedError
 		})
@@ -103,7 +111,7 @@ func TestCall(t *testing.T) {
 			return "result", nil
 		})
 		testutil.PanicsWithErrorIs(t, ErrGoroutinesNotExited, func() {
-			call(t.Context(), fn, moment.Identity{}, struct{}{}, nil)
+			call(replayCtx(t), fn, moment.Identity{}, struct{}{}, nil)
 		})
 	})
 }

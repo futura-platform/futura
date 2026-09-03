@@ -60,7 +60,7 @@ func evaluateWithCallstack[A comparable, R any](
 	callstack []runtime.Frame,
 ) (output R, err error) {
 	// if the replay is cancelled, terminate it immediately
-	terminateIfCancelled(ctx)
+	terminateIfReplayCancelled(ctx)
 	identity := moment.NewIdentity(
 		ctx,
 		replay.CallstackToCallpath(callstack),
