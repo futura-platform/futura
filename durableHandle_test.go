@@ -8,11 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flowhooks"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/futura-platform/futura/internal/utils/testutil"
 	"github.com/futura-platform/futura/privateencoding"
@@ -542,6 +540,77 @@ func TestDurableHandle(t *testing.T) {
 }
 
 func TestDurableHandle_Cleanup(t *testing.T) {
+	t.Run("runs once at the end of an execution when the handle is provided inside the flow", func(t *testing.T) {
+		cleanupCalls, replays := 0, 0
+		var cleaned *int
+		h := NewDurableHandle[int](
+			"cleanupProvidedInFlowHandle",
+			func() *int {
+				v := 0
+				return &v
+			},
+			func(input []byte) (*int, error) {
+				v := int(input[0])
+				return &v, nil
+			},
+			func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
+			func(v *int) error {
+				cleanupCalls++
+				cleaned = v
+				return nil
+			},
+		)
+
+		r, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			replays++
+			b = h.Provide(b)
+			ref, persist := h.Use(b)
+			if replays == 1 {
+				*ref = 7
+				persist()
+				// replay once more, so that cleanup is proven to run per execution rather than per replay
+				return 0, Action(b, func(ctx context.Context) error { return errors.New("retry") })
+			}
+			return *ref, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 7, r)
+		assert.Equal(t, 2, replays)
+		assert.Equal(t, 1, cleanupCalls)
+		assert.Equal(t, 7, *cleaned)
+	})
+
+	t.Run("runs once at the end of an execution when the handle is provided as a loop option", func(t *testing.T) {
+		cleanupCalls := 0
+		h := NewDurableHandle[int](
+			"cleanupProvidedAsOptionHandle",
+			func() *int {
+				v := 0
+				return &v
+			},
+			func(input []byte) (*int, error) {
+				v := int(input[0])
+				return &v, nil
+			},
+			func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
+			func(*int) error {
+				cleanupCalls++
+				return nil
+			},
+		)
+
+		var optionCtx context.Context
+		_, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			_, _ = h.Use(optionCtx)
+			return 0, nil
+		}, struct{}{}, func(ctx context.Context) context.Context {
+			optionCtx = h.ProvideContext(ctx)
+			return optionCtx
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, cleanupCalls)
+	})
+
 	t.Run("calls cleanup with the cached pointer at execution end", func(t *testing.T) {
 		cleanupCalls := 0
 		var (
@@ -573,7 +642,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		usedPtr = ref
 		*ref = 7
 
-		err := flowhooks.RunOnExecutionEnd(b, nil)
+		err := durable.CleanupHandles(b)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, cleanupCalls)
 		assert.Same(t, usedPtr, cleanedPtr)
@@ -601,12 +670,12 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newDurableTestBuilder(t, exec, h.Provide)
-		err := flowhooks.RunOnExecutionEnd(b, nil)
+		err := durable.CleanupHandles(b)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, cleanupCalls)
 	})
 
-	t.Run("calls cleanup even when execution ends with ErrCancelFlow", func(t *testing.T) {
+	t.Run("calls cleanup once the handle has been used", func(t *testing.T) {
 		cleanupCalls := 0
 		h := NewDurableHandle[int](
 			"cleanupOnCancelHandle",
@@ -629,7 +698,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		b := newDurableTestBuilder(t, exec, h.Provide)
 		_, _ = h.Use(b)
 
-		err := flowhooks.RunOnExecutionEnd(b, ftype.ErrCancelFlow)
+		err := durable.CleanupHandles(b)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, cleanupCalls)
 	})

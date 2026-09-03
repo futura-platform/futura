@@ -11,7 +11,6 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/flowhooks"
 	"github.com/futura-platform/futura/internal/goroutinebind"
 )
 
@@ -55,6 +54,7 @@ func NewDurableHandle[T any](
 
 type durableResolver[T any] struct {
 	handleId int32
+	cleanup  func(*T) error
 
 	// durableMu protects the resolver state below. It is shared across resolve and
 	// persist calls, so that remote checksum state stays canonical across multiple
@@ -64,6 +64,21 @@ type durableResolver[T any] struct {
 	valueLoader  sync.Once
 	valueLoadErr any
 	cached       fastComparableValue[T]
+}
+
+// Cleanup implements durable.Cleaner. It is only called if the value was resolved.
+func (r *durableResolver[T]) Cleanup() error {
+	if r.cleanup == nil {
+		return nil
+	}
+
+	r.durableMu.Lock()
+	v := r.cached.value
+	r.durableMu.Unlock()
+	if v == nil {
+		return nil
+	}
+	return r.cleanup(v)
 }
 
 type syncLevel int
@@ -160,29 +175,15 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 		panic(fmt.Errorf("%w: %s", ErrDurableHandlesNotFound, d.key))
 	}
 
-	// either load the existing resolver, or create a new one
+	// either load the existing resolver, or create a new one.
+	// the cache cleans its resolvers up when the execution ends.
 	anyResolver, _ := handles.LoadOrCompute(d.key, func() (any, bool) {
 		return &durableResolver[T]{
 			handleId: d.id,
+			cleanup:  d.cleanup,
 		}, false
 	})
-	resolver := anyResolver.(*durableResolver[T])
-
-	// Optionally register cleanup to run at execution end.
-	ctx = flowhooks.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
-		if d.cleanup == nil {
-			return nil
-		}
-
-		resolver.durableMu.Lock()
-		v := resolver.cached.value
-		resolver.durableMu.Unlock()
-		if v == nil {
-			return nil
-		}
-		return d.cleanup(v)
-	})(ctx)
-	return context.WithValue(ctx, d.key, resolver)
+	return context.WithValue(ctx, d.key, anyResolver.(*durableResolver[T]))
 }
 
 var (
