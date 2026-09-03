@@ -33,3 +33,21 @@ by `step.ErrNestedStep`, but a linter catches it before the flow runs.
 
 The flow function is pure except inside steps. A linter can flag I/O, time, randomness, and goroutine
 creation outside a moment fn. This is the rule the runtime relies on most and enforces least.
+
+## Steps run in the flow body, never in a defer
+
+A step must not be evaluated from a Go `defer` in the flow function, nor from a `futura.Defer` callback.
+
+```go
+func flowFn(b futura.FlowBuilder, _ struct{}) (int, error) {
+    defer func() { futura.Action(b, cleanup) }()   // no
+    futura.Defer(b, func() { futura.Action(b, cleanup) }) // no: runs after the replay, panics
+    ...
+}
+```
+
+Why: a deferred closure's parent frame reports the line of whichever `return` is unwinding, so the
+same step gets a different identity depending on the return path. `futura.Defer` runs after the replay
+has ended, so a step inside it has no replay to record into. The runtime cannot tell a deferred call
+from a direct one (the frames are identical), so this is a linter rule: flag `defer` statements in a
+flow function whose closure references the builder, and flag step calls inside a `futura.Defer` callback.

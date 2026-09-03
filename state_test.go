@@ -14,18 +14,22 @@ import (
 )
 
 // crashingContainer simulates the process dying partway through an execution by panicking on
-// the nth durable write, so that a fresh execution can be resumed over whatever was committed.
+// the nth durable write, or right after the nth committed transaction, so that a fresh execution
+// can be resumed over whatever was committed.
 // A transaction's writes only land once it returns, so a crash inside it commits nothing, like a real backend.
 type crashingContainer struct {
 	*executiontype.InMemoryContainer
 	writes  int
 	crashAt int
+	// commits counts committed transactions; crashAfterCommit, if set, crashes once that many have committed
+	commits          int
+	crashAfterCommit int
 }
 
 var errSimulatedCrash = errors.New("simulated crash")
 
 func (c *crashingContainer) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
-	return c.InMemoryContainer.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
+	err := c.InMemoryContainer.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
 		buffered := &crashingTx{Container: tx, c: c, durable: map[string][]byte{}}
 		if err := fn(ctx, buffered); err != nil {
 			return err
@@ -37,6 +41,14 @@ func (c *crashingContainer) Transact(ctx context.Context, fn func(ctx context.Co
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	c.commits++
+	if c.commits == c.crashAfterCommit {
+		panic(errSimulatedCrash)
+	}
+	return nil
 }
 
 type crashingTx struct {
@@ -340,6 +352,68 @@ func TestState(t *testing.T) {
 				assert.Equal(t, 1, r)
 			})
 		}
+	})
+	t.Run("a state change made inside a step is committed together with the step's memo", func(t *testing.T) {
+		// The step's memo says the step completed. If the Set it made were committed separately, a
+		// crash between the two would leave a memo that is never re-executed and a state that was
+		// never written: the flow would read the initial value forever.
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			s := futura.State(b, 0)
+			if err := futura.Action(b, func(ctx context.Context) error {
+				if s.V() == 0 {
+					s.Set(7)
+				}
+				return nil
+			}); err != nil {
+				return 0, err
+			}
+			return s.V(), nil
+		}
+
+		commits := func() int {
+			c := &crashingContainer{InMemoryContainer: executiontype.NewInMemoryContainer()}
+			r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, 7, r)
+			return c.commits
+		}()
+
+		for crashAfter := 1; crashAfter <= commits; crashAfter++ {
+			t.Run(fmt.Sprintf("crash after commit %d", crashAfter), func(t *testing.T) {
+				c := &crashingContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), crashAfterCommit: crashAfter}
+				_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+				assert.ErrorIs(t, err, errSimulatedCrash)
+
+				c.crashAfterCommit = 0
+				r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+				assert.NoError(t, err)
+				assert.Equal(t, 7, r)
+			})
+		}
+	})
+	t.Run("a state change made inside a step survives the run being cancelled before the next replay", func(t *testing.T) {
+		// The same gap, reached by an outer cancellation instead of a crash.
+		c := executiontype.NewInMemoryContainer()
+		ctx, cancel := context.WithCancel(t.Context())
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			s := futura.State(b, 0)
+			if err := futura.Action(b, func(ctx context.Context) error {
+				if s.V() == 0 {
+					s.Set(7)
+					cancel()
+				}
+				return nil
+			}); err != nil {
+				return 0, err
+			}
+			return s.V(), nil
+		}
+		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(ctx, flowFn, struct{}{})
+		assert.ErrorIs(t, err, context.Canceled)
+
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 7, r)
 	})
 	t.Run("states can be read and set concurrently from different goroutines", func(t *testing.T) {
 		// Every State in a flow shares one value map, so a Set from a goroutine must not

@@ -149,16 +149,7 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	var flags replay.Flags
 	var dirtyEpoch uint64
 	err := f.c.Transact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.Container) error {
-		dirtyEpoch = f.getEpoch(tx, dirtyEpochKey)
-		if len(f.dirty) > 0 {
-			dirtyEpoch++
-			f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
-			for key, value := range f.dirty {
-				if err := tx.StoreDurable(GenericDurableKey(key), value); err != nil {
-					return err
-				}
-			}
-		}
+		dirtyEpoch = f.flushDirty(tx)
 		flags = replay.Flags{
 			// an unevaluated invalidation is uncharted territory, so allow the moment order to change
 			PanicOnMomentOrderChange: dirtyEpoch <= f.getEpoch(tx, evaluatedEpochKey),
@@ -171,6 +162,24 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	f.dirty = nil
 
 	return sequence.With(replayCtx, flags), dirtyEpoch
+}
+
+// flushDirty writes every value written behind into tx, together with the dirty epoch bump that makes
+// the next replay relaxed, and returns the resulting dirty epoch. It must be called with mu held, and it
+// only touches tx: the caller clears the dirty map once the transaction has committed.
+func (f *FlowExecution) flushDirty(tx executiontype.Container) uint64 {
+	dirtyEpoch := f.getEpoch(tx, dirtyEpochKey)
+	if len(f.dirty) == 0 {
+		return dirtyEpoch
+	}
+	dirtyEpoch++
+	f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
+	for key, value := range f.dirty {
+		if err := tx.StoreDurable(GenericDurableKey(key), value); err != nil {
+			panic(err)
+		}
+	}
+	return dirtyEpoch
 }
 
 var (
@@ -263,6 +272,8 @@ func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity)
 
 // RecordCurrentMoment stores the current identity+moment (growing the sequence slice if necessary)
 // it also marks the identity as seen.
+// Anything written behind while the moment was produced is committed with it: the memo is the record
+// that the moment's effects happened, so it must never be durable without them.
 func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment moment.Moment) {
 	if sequence.IsSeen(ctx, identity) {
 		// if we see an identity twice in the same replay, the consumer is doing something wrong
@@ -285,7 +296,11 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 			tx.SetCallOrderAt(i, identity)
 		}
 		tx.SetMoment(identity, currentMoment)
+		f.flushDirty(tx)
 	})
+	f.mu.Lock()
+	f.dirty = nil
+	f.mu.Unlock()
 	sequence.MarkSeen(ctx, identity)
 }
 
