@@ -49,20 +49,16 @@ var ErrTransactionFailed = errors.New("transaction failed")
 
 // The execution's transactions record what has already happened,
 // so we shouldnt let the context cancel them, since the context can be cancelled by the user code arbitrarily.
+// it must be called with mu held.
 func (f *FlowExecution) mustTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container)) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	err := f.c.Transact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.Container) error { fn(ctx, tx); return nil })
 	if err != nil {
 		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
 	}
 }
 
+// mustReadTransact is a read only version of mustTransact.
 func (f *FlowExecution) mustReadTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.ReadOnlyContainer)) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
 	err := f.c.ReadTransact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.ReadOnlyContainer) error { fn(ctx, tx); return nil })
 	if err != nil {
 		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
@@ -151,17 +147,13 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	// In-memory state (the dirty map) is consumed after it commits.
 	var flags replay.Flags
 	var dirtyEpoch uint64
-	err := f.c.Transact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.Container) error {
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		dirtyEpoch = f.flushDirty(tx)
 		flags = replay.Flags{
 			// an unevaluated invalidation is uncharted territory, so allow the moment order to change
 			PanicOnMomentOrderChange: dirtyEpoch <= f.getEpoch(tx, evaluatedEpochKey),
 		}
-		return nil
 	})
-	if err != nil {
-		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
-	}
 	f.dirty = nil
 
 	return sequence.With(replayCtx, flags), dirtyEpoch
@@ -191,6 +183,8 @@ var (
 )
 
 func (f *FlowExecution) SettleSequence(ctx context.Context, atIndex int, toEpoch uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		stored := f.getEpoch(tx, evaluatedEpochKey)
 		if stored > toEpoch {
@@ -233,6 +227,8 @@ func (f *FlowExecution) ReadBehind(ctx context.Context, durableKey string) ([]by
 	var state []byte
 	var ok bool
 	var err error
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
 		if state, ok = f.dirty[durableKey]; ok {
 			return
@@ -247,6 +243,8 @@ func (f *FlowExecution) ReadBehind(ctx context.Context, durableKey string) ([]by
 
 func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.Identity, ok bool) {
 	i := sequence.GetIndex(ctx)
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
 		size := tx.CallOrderLength()
 		if i > size {
@@ -267,6 +265,8 @@ func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.I
 func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity) (moment.Moment, bool) {
 	var moment moment.Moment
 	var ok bool
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
 		moment, ok = tx.GetMoment(identity)
 	})
@@ -285,6 +285,10 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 		}))
 	}
 
+	// the lock spans the commit and the clear: a value written behind in between would be cleared
+	// without ever having been flushed
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		i := sequence.GetIndex(ctx)
 		size := tx.CallOrderLength()
@@ -301,9 +305,7 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 		tx.SetMoment(identity, currentMoment)
 		f.flushDirty(tx)
 	})
-	f.mu.Lock()
 	f.dirty = nil
-	f.mu.Unlock()
 	sequence.MarkSeen(ctx, identity)
 }
 
@@ -311,6 +313,8 @@ func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]b
 	var state []byte
 	var ok bool
 	var err error
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
 		state, ok, err = tx.LoadDurable(GenericDurableKey(durableKey))
 	})
@@ -321,6 +325,8 @@ func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]b
 }
 
 func (f *FlowExecution) StoreDurable(ctx context.Context, durableKey string, state []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		err := tx.StoreDurable(GenericDurableKey(durableKey), state)
 		if err != nil {

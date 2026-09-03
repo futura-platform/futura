@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
@@ -629,6 +634,70 @@ func TestState(t *testing.T) {
 		assert.Equal(t, 5, r)
 		assert.Equal(t, []int{5}, heldSaw)
 		assert.Equal(t, 2, replays, "a Set to the current value through the held container is a no-op")
+	})
+	t.Run("a state change that lands while a step's memo commits is not lost", func(t *testing.T) {
+		const sets = 5000
+		quiet := fopt.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		c := executiontype.NewInMemoryContainer()
+		var once sync.Once
+		var setReturned, acked atomic.Int64
+		done := make(chan struct{})
+		setDone := make(chan struct{})
+		lostAt := -1
+		var readOnly atomic.Bool
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			s := futura.State(b, 0)
+			if readOnly.Load() {
+				return s.V(), nil
+			}
+			once.Do(func() {
+				go func() {
+					defer close(setDone)
+					for k := 1; k <= sets; k++ {
+						s.Set(k)
+						setReturned.Store(int64(k))
+						for acked.Load() < int64(k) {
+							select {
+							case <-done:
+								return
+							default:
+								runtime.Gosched()
+							}
+						}
+					}
+				}()
+			})
+			for i := 0; ; i++ {
+				if err := futura.Action(b.WithKey(fmt.Sprint(i)), func(ctx context.Context) error { return nil }); err != nil {
+					return 0, err
+				}
+				k := int(setReturned.Load())
+				v := s.V()
+				if v < k {
+					// Set(k) returned before this V(), yet V() reads an older value
+					lostAt = k
+					return v, nil
+				}
+				if v == k {
+					acked.Store(int64(k))
+				}
+				if k == sets && v == sets {
+					return v, nil
+				}
+			}
+		}
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{}, quiet)
+		close(done)
+		<-setDone
+		assert.NoError(t, err)
+		if lostAt < 0 {
+			assert.Equal(t, sets, r)
+			return
+		}
+		readOnly.Store(true)
+		r2, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{}, quiet)
+		assert.NoError(t, err)
+		t.Fatalf("Set(%d) returned, but the flow then read %d, and a fresh execution over the same container reads %d", lostAt, r, r2)
 	})
 	t.Run("a state change with no replay running is applied by the next replay to start", func(t *testing.T) {
 		var held futura.StateContainer[int]
