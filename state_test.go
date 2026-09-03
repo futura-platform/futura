@@ -472,6 +472,32 @@ func TestState(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, 0, r)
 		})
+		t.Run("a step that fails on its own after the change is still a failure", func(t *testing.T) {
+			// A step is only terminated for the cancellation itself. An error the step decided to
+			// return is its verdict, and it must reach the flow's error handling and the step wrappers.
+			var seen []error
+			r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				ready := futura.State(b, false)
+				attempts := futura.State(b, 0)
+				err := futura.Action(b, func(ctx context.Context) error {
+					if !ready.V() {
+						ready.Set(true)
+						return errors.New("declined")
+					}
+					return nil
+				})
+				if err != nil {
+					seen = append(seen, err)
+					attempts.Set(attempts.V() + 1)
+					return 0, err
+				}
+				return attempts.V(), nil
+			}, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, 1, r, "the failure was recorded by the flow")
+			assert.Len(t, seen, 1)
+			assert.ErrorContains(t, seen[0], "declined")
+		})
 		t.Run("pure code after the change still runs, so consecutive state changes stay atomic", func(t *testing.T) {
 			r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 				open := futura.State(b, false)

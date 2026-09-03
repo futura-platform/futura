@@ -66,6 +66,16 @@ func TestWithMaxFailures(t *testing.T) {
 		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
 	})
 
+	t.Run("a failure returned after a state change inside the step is counted", func(t *testing.T) {
+		_, err := futura.NewFlowFromContainer[any, any](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, args any) (any, error) {
+			phase := futura.State(b, 0)
+			return nil, futura.Action(b, func(ctx context.Context) error {
+				phase.Set(phase.V() + 1)
+				return errors.New("always")
+			})
+		}, nil, fopt.WithMaxFailures(2))
+		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
+	})
 	t.Run("a state change made in response to the cancellation does not restart the flow", func(t *testing.T) {
 		// Reaching the limit ends the flow. A flow that records the failure in a state (which restarts
 		// the replay) must still end, otherwise every replay reaches the limit again and it never does.

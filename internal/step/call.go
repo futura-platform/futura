@@ -28,8 +28,9 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 		if activeGoroutines.Cardinality() != 0 {
 			panic(fmt.Errorf("%w: %s", ErrGoroutinesNotExited, activeGoroutines))
 		}
-		if err != nil {
-			// only check for the termination condition if the step did not exit successfully.
+		if errors.Is(err, ctx.Err()) {
+			// the step returned the cancellation itself, rather than a verdict of its own.
+			// if the cancellation was the replay's, terminate: the cancellation is not a failure.
 			terminateIfReplayCancelled(ctx)
 		}
 		return output, err
