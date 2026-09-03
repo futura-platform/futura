@@ -51,3 +51,17 @@ same step gets a different identity depending on the return path. `futura.Defer`
 has ended, so a step inside it has no replay to record into. The runtime cannot tell a deferred call
 from a direct one (the frames are identical), so this is a linter rule: flag `defer` statements in a
 flow function whose closure references the builder, and flag step calls inside a `futura.Defer` callback.
+
+## A moment function must not close over values that vary per call
+
+Identity is by source location: where the step is reached and where the fn is declared. Captured state
+is not part of it, so two closures from one factory (`mk(1)`, `mk(2)`), or method values on two
+receivers, are the same moment. Pass the varying value as the step's args, or key on it with `WithKey`;
+never smuggle it through a capture.
+
+```go
+fn := mk(n)                         // no: n is captured, invisible to the runtime
+futura.Step(b, fn, struct{}{})
+futura.Step(b, run, n)              // yes: n is an arg, part of the memo
+futura.Step(b.WithKey(id), fn, ...) // yes: id keys the moment
+```
