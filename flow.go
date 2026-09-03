@@ -57,10 +57,6 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 	}
 	defer stopRun()
 
-	if _, ok := execution.FromContext(ctx); ok {
-		return *new(R), ErrTopLevelFlowConflict
-	}
-
 	defer func() {
 		if r := recover(); r != nil {
 			switch r := r.(type) {
@@ -72,6 +68,10 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 			err = fmt.Errorf("%w\n%s", err, debug.Stack())
 		}
 	}()
+
+	if _, ok := execution.FromContext(ctx); ok {
+		return *new(R), ErrTopLevelFlowConflict
+	}
 
 	result, err = flow.Loop(
 		execution.WithFlow(ctx, f.exec),

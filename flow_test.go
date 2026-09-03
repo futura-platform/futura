@@ -42,6 +42,18 @@ func TestFlow(t *testing.T) {
 		}, nil)
 		assert.ErrorIs(t, err, futura.ErrTopLevelFlowConflict)
 	})
+	t.Run("a flow context from an execution that is not running is reported as a flow panic", func(t *testing.T) {
+		// the conflict check asserts on the context it is given; that assertion must be recovered like any other
+		stale := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
+		var err error
+		assert.NotPanics(t, func() {
+			_, err = futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(stale, func(b futura.FlowBuilder, _ *any) (string, error) {
+				return "never reached", nil
+			}, nil)
+		})
+		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, execution.ErrFlowExecutionNotRunning)
+	})
 	t.Run("do not execute a flow more than once concurrently", func(t *testing.T) {
 		fnEntered := make(chan struct{})
 		goroutine2Finished := make(chan struct{})
@@ -114,7 +126,7 @@ func TestFlow(t *testing.T) {
 		assert.Equal(t, runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(), fnChange.NewMomentFnName)
 		// the identity's callpath spans from the flow fn's Step call up through futura's own
 		// Execute wrapper, so pin it by its user callsite rather than reconstructing every frame.
-		assert.Contains(t, fnChange.Identity.Callpath().V(), moment.Callsite{File: "github.com/futura-platform/futura_test/flow_test.go", Line: 102})
+		assert.Contains(t, fnChange.Identity.Callpath().V(), moment.Callsite{File: "github.com/futura-platform/futura_test/flow_test.go", Line: 114})
 	})
 	t.Run("A single keyed moment identity should be able to be used with multiple moment functions", func(t *testing.T) {
 		r, err := checkMultipleMomentFunctions(t, func(b futura.FlowBuilder) futura.FlowBuilder {
