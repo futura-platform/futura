@@ -20,6 +20,15 @@ func CallstackToCallpath(callstack []runtime.Frame) moment.Callpath {
 	return p
 }
 
+// FuncToCallsite converts a function into the location-independent callsite of its declaration.
+func FuncToCallsite(fn *runtime.Func) moment.Callsite {
+	file, line := fn.FileLine(fn.Entry())
+	return moment.Callsite{
+		File: path.Join(packagePath(fn.Name()), path.Base(file)),
+		Line: line,
+	}
+}
+
 // packagePath returns the import path of the package that declares a fully qualified symbol.
 func packagePath(function string) string {
 	slash := strings.LastIndexByte(function, '/')

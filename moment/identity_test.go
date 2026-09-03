@@ -23,22 +23,22 @@ func TestWithIdentityKey(t *testing.T) {
 		assert.Equal(t, []string{"placeholder", "placeholder2"}, key)
 	})
 	t.Run("layered keys are distinct from a single key with the same characters", func(t *testing.T) {
-		callpath := Callpath{{File: "a.go", Line: 1}}
-		layered := NewIdentity(WithIdentityKey(WithIdentityKey(t.Context(), "a-b"), "c"), callpath)
-		alsoLayered := NewIdentity(WithIdentityKey(WithIdentityKey(t.Context(), "a"), "b-c"), callpath)
-		single := NewIdentity(WithIdentityKey(t.Context(), "a-b-c"), callpath)
+		callpath, fn := Callpath{{File: "a.go", Line: 1}}, Callsite{File: "a.go", Line: 10}
+		layered := NewIdentity(WithIdentityKey(WithIdentityKey(t.Context(), "a-b"), "c"), callpath, fn)
+		alsoLayered := NewIdentity(WithIdentityKey(WithIdentityKey(t.Context(), "a"), "b-c"), callpath, fn)
+		single := NewIdentity(WithIdentityKey(t.Context(), "a-b-c"), callpath, fn)
 		assert.NotEqual(t, layered, alsoLayered)
 		assert.NotEqual(t, layered, single)
 		assert.NotEqual(t, alsoLayered, single)
 	})
 	t.Run("keys with any content stay distinct", func(t *testing.T) {
-		callpath := Callpath{{File: "a.go", Line: 1}}
+		callpath, fn := Callpath{{File: "a.go", Line: 1}}, Callsite{File: "a.go", Line: 10}
 		build := func(keys ...string) Identity {
 			ctx := t.Context()
 			for _, k := range keys {
 				ctx = WithIdentityKey(ctx, k)
 			}
-			return NewIdentity(ctx, callpath)
+			return NewIdentity(ctx, callpath, fn)
 		}
 		assert.NotEqual(t, build("a b"), build("a", "b"))
 		assert.NotEqual(t, build("[a]"), build("a"))
@@ -54,9 +54,17 @@ func TestNewIdentity(t *testing.T) {
 		ctx = WithIdentityKey(ctx, "placeholder")
 
 		callpath := Callpath{{File: "placeholder-path"}}
-		identity := NewIdentity(ctx, callpath)
+		fn := Callsite{File: "placeholder-path", Line: 10}
+		identity := NewIdentity(ctx, callpath, fn)
 
 		assert.Equal(t, []string{"placeholder"}, identity.key.V())
 		assert.Equal(t, callpath, identity.Callpath().V())
+		assert.Equal(t, fn, identity.fn)
+	})
+	t.Run("the same callpath reached with different functions gives different identities", func(t *testing.T) {
+		callpath := Callpath{{File: "a.go", Line: 1}}
+		first := NewIdentity(t.Context(), callpath, Callsite{File: "a.go", Line: 10})
+		second := NewIdentity(t.Context(), callpath, Callsite{File: "a.go", Line: 20})
+		assert.NotEqual(t, first, second)
 	})
 }

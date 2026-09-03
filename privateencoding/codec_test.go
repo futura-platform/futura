@@ -2,7 +2,6 @@ package privateencoding_test
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
@@ -272,7 +271,7 @@ func TestCodec(t *testing.T) {
 	})
 
 	t.Run("moment_identity", func(t *testing.T) {
-		id := moment.NewIdentity(t.Context(), moment.Callpath{{File: "test.go", Line: 1}})
+		id := moment.NewIdentity(t.Context(), moment.Callpath{{File: "test.go", Line: 1}}, moment.Callsite{})
 		applyCodecThenCompare(t, id, nil)
 	})
 }
@@ -321,9 +320,7 @@ func TestCodecNilURLPointer(t *testing.T) {
 
 func TestCodecURLPointerInMomentOutput(t *testing.T) {
 	privateencoding.Register[*url.URL]()
-	value := *moment.NewMoment(moment.NewFn(func(ctx context.Context, args int) (int, error) {
-		return args, nil
-	}), 1)
+	value := *moment.NewMoment(1)
 	value.SetValidOutput(&url.URL{
 		Scheme:   "https",
 		Host:     "example.com",

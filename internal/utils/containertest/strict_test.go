@@ -64,7 +64,7 @@ func TestStrict(t *testing.T) {
 	})
 	t.Run("call order and memo edits are discarded with their attempt", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
-		committed := moment.NewIdentity(t.Context(), moment.Callpath{{File: "committed"}})
+		committed := moment.NewIdentity(t.Context(), moment.Callpath{{File: "committed"}}, moment.Callsite{})
 		c.AppendCallOrder(committed)
 		c.SetMoment(committed, moment.Moment{})
 		r := NewStrict(c)
@@ -73,7 +73,7 @@ func TestStrict(t *testing.T) {
 			assert.Equal(t, 1, tx.CallOrderLength(), "a previous attempt's append leaked into this one")
 			assert.True(t, tx.HasMoment(committed), "a previous attempt's delete leaked into this one")
 
-			mine := moment.NewIdentity(t.Context(), moment.Callpath{{File: "mine"}})
+			mine := moment.NewIdentity(t.Context(), moment.Callpath{{File: "mine"}}, moment.Callsite{})
 			tx.AppendCallOrder(mine)
 			tx.SetMoment(mine, moment.Moment{})
 			tx.DeleteMoment(committed)

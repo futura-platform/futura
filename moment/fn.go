@@ -24,14 +24,18 @@ type Fn[A any, R any] struct {
 	flowCaller runtime.Frame
 	callable   Callable[A, R]
 
-	options  []ftype.MomentFnOption
 	metadata ftype.MomentFnMetadata
 }
 
 func NewFn[A comparable, R any](callable Callable[A, R], options ...ftype.MomentFnOption) Fn[A, R] {
-	c := Fn[A, R]{callable: callable, options: options}
-	for _, opt := range append([]ftype.MomentFnOption{ftype.WithLabel(CompileTimeLabel(c.runtimeFunc()))}, options...) {
+	c := Fn[A, R]{callable: callable}
+	// the callable is the default runtime func, and the label follows whichever runtime func ends up set
+	c.metadata.RuntimeFunc = runtime.FuncForPC(reflect.ValueOf(callable).Pointer())
+	for _, opt := range options {
 		opt(&c.metadata)
+	}
+	if c.metadata.Label == "" {
+		c.metadata.Label = CompileTimeLabel(c.metadata.RuntimeFunc)
 	}
 	return c
 }
@@ -44,10 +48,7 @@ func (fn Fn[A, R]) Label() string {
 	return fn.metadata.Label
 }
 
-func (fn Fn[A, R]) Options() []ftype.MomentFnOption {
-	return fn.options
-}
-
-func (fn Fn[A, R]) runtimeFunc() *runtime.Func {
-	return runtime.FuncForPC(reflect.ValueOf(fn.callable).Pointer())
+// RuntimeFunc is the function the moment is identified by.
+func (fn Fn[A, R]) RuntimeFunc() *runtime.Func {
+	return fn.metadata.RuntimeFunc
 }

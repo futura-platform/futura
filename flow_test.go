@@ -3,8 +3,6 @@ package futura_test
 import (
 	"context"
 	"errors"
-	"reflect"
-	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -13,8 +11,8 @@ import (
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
+	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/internal/utils/containertest"
-	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -117,25 +115,55 @@ func TestFlow(t *testing.T) {
 		return r, err
 	}
 	t.Run("A single keyless moment identity should only ever be used with a single moment function", func(t *testing.T) {
+		// the fn is part of the identity, so swapping it at a callsite is a new branch, which a strict replay rejects
 		_, err := checkMultipleMomentFunctions(t, nil, nil)
 		assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
-		var fnChange moment.MomentFnChangeError
-		assert.ErrorAs(t, err, &fnChange)
-		assert.Equal(t, 0, fnChange.Index)
-		assert.Equal(t, runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(), fnChange.OldMomentFnName)
-		assert.Equal(t, runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(), fnChange.NewMomentFnName)
-		// the identity's callpath spans from the flow fn's Step call up through futura's own
-		// Execute wrapper, so pin it by its user callsite rather than reconstructing every frame.
-		assert.Contains(t, fnChange.Identity.Callpath().V(), moment.Callsite{File: "github.com/futura-platform/futura_test/flow_test.go", Line: 114})
+		assert.ErrorIs(t, err, step.ErrUnexpectedBranchTaken)
 	})
-	t.Run("A single keyed moment identity should be able to be used with multiple moment functions", func(t *testing.T) {
-		r, err := checkMultipleMomentFunctions(t, func(b futura.FlowBuilder) futura.FlowBuilder {
-			return b.WithKey("1")
-		}, func(b futura.FlowBuilder) futura.FlowBuilder {
-			return b.WithKey("2")
-		})
+	t.Run("A keyed moment identity can be used with a different moment function once a state change relaxes the replay", func(t *testing.T) {
+		// the key is part of the identity, so changing it at a settled index is a new branch:
+		// it is allowed for the same reason any new branch is, a state change
+		r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+			useSecond := futura.State(b, false)
+			if !useSecond.V() {
+				if _, err := futura.Step(b.WithKey("1"), fn1, nil); err != nil {
+					useSecond.Set(true)
+					return "", err
+				}
+			}
+			return futura.Step(b.WithKey("2"), fn2, nil)
+		}, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, "fn2", r)
+	})
+	t.Run("a key that changes at a settled index without a state change is an unexpected branch", func(t *testing.T) {
+		replays := 0
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+			replays++
+			// a key that is not a pure function of the flow's state
+			return futura.Step(b.WithKey(strconv.Itoa(replays)), fn1, nil)
+		}, nil)
+		assert.ErrorIs(t, err, step.ErrUnexpectedBranchTaken)
+	})
+	t.Run("a loop keyed by its index is memoized across replays", func(t *testing.T) {
+		calls := 0
+		replays := 0
+		r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+			replays++
+			for i := range 3 {
+				if err := futura.Action(b.WithKey(strconv.Itoa(i)), func(ctx context.Context) error { calls++; return nil }); err != nil {
+					return "", err
+				}
+			}
+			if replays < 3 {
+				return "", futura.Action(b, func(ctx context.Context) error { return errors.New("retry") })
+			}
+			return "done", nil
+		}, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, "done", r)
+		assert.Equal(t, 3, replays)
+		assert.Equal(t, 3, calls, "each keyed iteration ran once, then hit its memo on every replay")
 	})
 	t.Run("layered keys do not collide with each other or with a single key", func(t *testing.T) {
 		calls := 0

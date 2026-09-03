@@ -11,7 +11,9 @@ import (
 
 // Identity is a unique identifier for a moment.
 // It is used to identify the specific point in time a moment occurs in the flow.
-// The callpath identifies where in the code the moment is defined, and the key identifies the "instance" of the moment.
+// The callpath identifies where in the code the moment is reached, the fn identifies which function is
+// evaluated there (the callpath ends at the call, so it cannot tell two functions passed to it apart),
+// and the key identifies the "instance" of the moment.
 //
 // This is useful for moments produced by loops. This is a similar concept to React's "key" prop.
 //
@@ -19,6 +21,7 @@ import (
 // (like a helper function that could be called inside or out of a loop)
 type Identity struct {
 	callpath seal.Sealed[Callpath]
+	fn       Callsite
 	key      seal.Sealed[[]string]
 }
 
@@ -26,16 +29,18 @@ func (i Identity) Callpath() seal.Sealed[Callpath] {
 	return i.callpath
 }
 
-func NewIdentity(ctx context.Context, callpath Callpath) Identity {
+// NewIdentity identifies the moment of evaluating the function declared at fn, reached through callpath.
+func NewIdentity(ctx context.Context, callpath Callpath, fn Callsite) Identity {
 	key, _ := IdentityFromContext(ctx)
 	return Identity{
 		callpath: seal.Seal(callpath),
+		fn:       fn,
 		key:      seal.Seal(key),
 	}
 }
 
 func (i Identity) String() string {
-	return fmt.Sprintf("key:%q callpath:%s", i.key.V(), i.callpath.V())
+	return fmt.Sprintf("key:%q fn:%s:%d callpath:%s", i.key.V(), i.fn.File, i.fn.Line, i.callpath.V())
 }
 
 type contextKey string

@@ -182,17 +182,13 @@ func TestExpectedIdentity(t *testing.T) {
 	})
 }
 
-var placeholderCallable = moment.NewFn[struct{}, struct{}](func(ctx context.Context, args struct{}) (struct{}, error) {
-	return struct{}{}, nil
-})
-
 func TestGetMoment(t *testing.T) {
 	ctx := t.Context()
 	c := executiontype.NewInMemoryContainer()
 	ctx = sequence.With(WithFlow(ctx, running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 	f := MustFromContext(ctx)
-	identity := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
-	m := moment.NewMoment(placeholderCallable, 1)
+	identity := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}}, moment.Callsite{})
+	m := moment.NewMoment(1)
 	c.SetMoment(identity, *m)
 
 	r, ok := f.GetMoment(ctx, identity)
@@ -271,8 +267,8 @@ func TestRecordCurrentMoment(t *testing.T) {
 		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
-		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
-		recordMoment := moment.NewMoment(placeholderCallable, 1)
+		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}}, moment.Callsite{})
+		recordMoment := moment.NewMoment(1)
 
 		f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
 		assert.Equal(t, c.CallOrderAt(0), recordKey)
@@ -285,8 +281,8 @@ func TestRecordCurrentMoment(t *testing.T) {
 		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
-		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
-		recordMoment := moment.NewMoment(placeholderCallable, 1)
+		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}}, moment.Callsite{})
+		recordMoment := moment.NewMoment(1)
 
 		c.SetMoment(recordKey, *recordMoment)
 		c.AppendCallOrder(recordKey)
@@ -305,8 +301,8 @@ func TestRecordCurrentMoment(t *testing.T) {
 		ctx := sequence.With(WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(strict))), DefaultReplayFlags)
 		f := MustFromContext(ctx)
 
-		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
-		recordMoment := moment.NewMoment(placeholderCallable, 1)
+		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}}, moment.Callsite{})
+		recordMoment := moment.NewMoment(1)
 
 		f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
 
@@ -320,8 +316,8 @@ func TestRecordCurrentMoment(t *testing.T) {
 		ctx := WithFlow(t.Context(), running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c))))
 		f := MustFromContext(ctx)
 
-		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}})
-		recordMoment := moment.NewMoment(placeholderCallable, 1)
+		recordKey := moment.NewIdentity(ctx, moment.Callpath{{File: "placeholder"}}, moment.Callsite{})
+		recordMoment := moment.NewMoment(1)
 		c.SetMoment(recordKey, *recordMoment)
 
 		t.Run("append to call order", func(t *testing.T) {

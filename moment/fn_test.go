@@ -35,12 +35,11 @@ func TestFnOptions(t *testing.T) {
 		opts := []ftype.MomentFnOption{ftype.WithLabel(label1), ftype.WithLabel(label2)}
 		fn := NewFn(labelToInfer, opts...)
 		assert.Equal(t, label2, fn.Label())
-		assert.Equal(t, opts, fn.Options())
 	})
 }
 
 func TestFnCall(t *testing.T) {
-	identity := NewIdentity(context.Background(), Callpath{{File: "a.go", Line: 1}})
+	identity := NewIdentity(context.Background(), Callpath{{File: "a.go", Line: 1}}, Callsite{File: "a.go", Line: 10})
 	t.Run("invokes the callable with the args", func(t *testing.T) {
 		fn := NewFn(func(ctx context.Context, args string) (string, error) { return args, nil })
 		r, err := fn.Call(context.Background(), identity, "test")

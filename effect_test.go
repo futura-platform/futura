@@ -163,3 +163,91 @@ func TestAction(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+// A moment fn is part of its identity: reaching the same callsite with a different fn is a new moment.
+// After a state change legitimately selects the other fn, it must run rather than reuse the first fn's memo.
+// Step gets this from the fn passed to it; the helpers wrap the user's fn, so they must identify the moment
+// by the user's fn and not by their wrapper.
+func TestHelpersIdentifyTheMomentByTheUserFn(t *testing.T) {
+	// the flow selects a fn by state, so the second replay legitimately reaches the same callsite with the other fn
+	swapAfterFirstReplay := func(t *testing.T, evaluate func(b futura.FlowBuilder, useSecond bool) error) error {
+		t.Helper()
+		_, err := futura.NewFlowFromContainer[struct{}, struct{}](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (struct{}, error) {
+			useSecond := futura.State(b, false)
+			if err := evaluate(b, useSecond.V()); err != nil {
+				return struct{}{}, err
+			}
+			if !useSecond.V() {
+				useSecond.Set(true)
+			}
+			return struct{}{}, nil
+		}, struct{}{})
+		return err
+	}
+
+	t.Run("Step", func(t *testing.T) {
+		firstCalls, secondCalls := 0, 0
+		first := func(ctx context.Context, _ struct{}) (struct{}, error) { firstCalls++; return struct{}{}, nil }
+		second := func(ctx context.Context, _ struct{}) (struct{}, error) { secondCalls++; return struct{}{}, nil }
+		err := swapAfterFirstReplay(t, func(b futura.FlowBuilder, useSecond bool) error {
+			fn := first
+			if useSecond {
+				fn = second
+			}
+			_, err := futura.Step(b, fn, struct{}{})
+			return err
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, firstCalls)
+		assert.Equal(t, 1, secondCalls)
+	})
+
+	t.Run("Effect", func(t *testing.T) {
+		firstCalls, secondCalls := 0, 0
+		first := func(ctx context.Context, _ struct{}) error { firstCalls++; return nil }
+		second := func(ctx context.Context, _ struct{}) error { secondCalls++; return nil }
+		err := swapAfterFirstReplay(t, func(b futura.FlowBuilder, useSecond bool) error {
+			fn := first
+			if useSecond {
+				fn = second
+			}
+			return futura.Effect(b, fn, struct{}{})
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, firstCalls)
+		assert.Equal(t, 1, secondCalls, "the second fn must run, not reuse the first fn's memo")
+	})
+
+	t.Run("Source", func(t *testing.T) {
+		firstCalls, secondCalls := 0, 0
+		first := func(ctx context.Context) (int, error) { firstCalls++; return 1, nil }
+		second := func(ctx context.Context) (int, error) { secondCalls++; return 2, nil }
+		err := swapAfterFirstReplay(t, func(b futura.FlowBuilder, useSecond bool) error {
+			fn := first
+			if useSecond {
+				fn = second
+			}
+			_, err := futura.Source(b, fn)
+			return err
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, firstCalls)
+		assert.Equal(t, 1, secondCalls, "the second fn must run, not reuse the first fn's memo")
+	})
+
+	t.Run("Action", func(t *testing.T) {
+		firstCalls, secondCalls := 0, 0
+		first := func(ctx context.Context) error { firstCalls++; return nil }
+		second := func(ctx context.Context) error { secondCalls++; return nil }
+		err := swapAfterFirstReplay(t, func(b futura.FlowBuilder, useSecond bool) error {
+			fn := first
+			if useSecond {
+				fn = second
+			}
+			return futura.Action(b, fn)
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, firstCalls)
+		assert.Equal(t, 1, secondCalls, "the second fn must run, not reuse the first fn's memo")
+	})
+}

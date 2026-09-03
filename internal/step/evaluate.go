@@ -69,6 +69,7 @@ func evaluateWithCallstack[A comparable, R any](
 	identity := moment.NewIdentity(
 		ctx,
 		replay.CallstackToCallpath(callstack),
+		replay.FuncToCallsite(fn.RuntimeFunc()),
 	)
 
 	f := execution.MustFromContext(ctx)
@@ -91,17 +92,14 @@ func evaluateWithCallstack[A comparable, R any](
 		}
 	}()
 
-	// first check if the expected callpath is the same as the current callpath,
+	// first check if the expected identity is the same as the current identity,
 	// if nothing is expected (meaning if ok is false), we can continue
 	expectedIdentity, ok := f.ExpectedIdentity(ctx)
-	if ok && expectedIdentity.Callpath() != identity.Callpath() && sequence.GetFlags(ctx).PanicOnMomentOrderChange {
+	if ok && expectedIdentity != identity && sequence.GetFlags(ctx).PanicOnMomentOrderChange {
 		panic(ftrerrors.InconsistentStateError(fmt.Errorf(
 			"%w:\n%s",
 			ErrUnexpectedBranchTaken,
-			diff.ObjectGoPrintSideBySide(
-				expectedIdentity.Callpath().V(),
-				identity.Callpath().V(),
-			),
+			diff.ObjectGoPrintSideBySide(expectedIdentity.String(), identity.String()),
 		)))
 	}
 
@@ -121,10 +119,10 @@ func evaluateWithCallstack[A comparable, R any](
 	currentMoment := &currentMomentValue
 
 	// validate BEFORE deferring the output handler, so that in the event of a panic, nothing is recorded.
-	needsExecution := !ok || !currentMoment.Validate(thisSequenceIndex, fn, args, identity)
+	needsExecution := !ok || !currentMoment.Validate(args)
 	if needsExecution {
 		// the recorded moment (if any) is for a stale input, so record the execution against a fresh one.
-		currentMoment = moment.NewMoment(fn, args)
+		currentMoment = moment.NewMoment(args)
 	}
 	defer func() {
 		if err != nil {

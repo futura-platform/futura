@@ -3,7 +3,6 @@ package step
 import (
 	"context"
 	"errors"
-	"reflect"
 	"runtime"
 
 	"testing"
@@ -96,10 +95,10 @@ func TestStep(t *testing.T) {
 			f := execution.MustFromContext(ctx)
 			ctx, _ = f.StartNewReplay(ctx)
 
-			expected := moment.NewIdentity(ctx, replay.CallstackToCallpath(mockStableCallstack))
 			fn := moment.NewFn(func(ctx context.Context, _ struct{}) (moment.Identity, error) {
 				return moment.CurrentIdentity(ctx), nil
 			})
+			expected := moment.NewIdentity(ctx, replay.CallstackToCallpath(mockStableCallstack), replay.FuncToCallsite(fn.RuntimeFunc()))
 
 			// on execution, the fn sees the identity the evaluator computed for it
 			seen, err := evaluateWithCallstack(ctx, fn, struct{}{}, mockStableCallstack)
@@ -148,6 +147,7 @@ func TestStep(t *testing.T) {
 
 	t.Run("impure flow detection", func(t *testing.T) {
 		t.Run("panics if the moment fn changes when it not allowed to", func(t *testing.T) {
+			// the fn is part of the identity, so a different fn at the same callpath is a new branch
 			result, err := replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
 				f := execution.MustFromContext(ctx)
 				ctx, _ = f.StartNewReplay(ctx)
@@ -165,13 +165,7 @@ func TestStep(t *testing.T) {
 
 				// restart and eval as if the code re-declared fn2 as this moment's fn
 				ctx = sequence.With(ctx, execution.DefaultReplayFlags) // rewind
-				expectedError := ftrerrors.InconsistentStateError(moment.MomentFnChangeError{
-					Index:           0,
-					Identity:        moment.NewIdentity(ctx, replay.CallstackToCallpath(mockStableCallstack)),
-					OldMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn1).Pointer()).Name(),
-					NewMomentFnName: runtime.FuncForPC(reflect.ValueOf(fn2).Pointer()).Name(),
-				})
-				assert.PanicsWithError(t, expectedError.Error(), func() {
+				testutil.PanicsWithErrorIs(t, ErrUnexpectedBranchTaken, func() {
 					evaluateWithCallstack(ctx, moment.NewFn(fn2), struct{}{}, mockStableCallstack)
 				})
 				assert.Equal(t, 0, sequence.GetIndex(ctx))
