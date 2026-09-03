@@ -78,6 +78,14 @@ func TestState(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 0, r)
 	})
+	t.Run("no initial value works for an interface type", func(t *testing.T) {
+		r, err := futura.NewFlowFromContainer[struct{}, error](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (error, error) {
+			state := futura.State[error](b)
+			return state.V(), nil
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Nil(t, r)
+	})
 	t.Run("an initial value can be provided", func(t *testing.T) {
 		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
 			state := futura.State(b, 1)
