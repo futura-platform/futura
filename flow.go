@@ -76,10 +76,7 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 	result, err = flow.Loop(
 		execution.WithFlow(ctx, f.exec),
 		func(flowCtx context.Context, args A) (R, error) {
-			b := newFlowBuilder(flowCtx, f.exec)
-			// include the state context by default for convenience
-			b = stateContext.Provide(b)
-			return fn(b, args)
+			return fn(newFlowBuilder(flowCtx, f.exec), args)
 		},
 		args,
 		append([]ftype.FlowLoopOption{durable.WithHandlesCache()}, opts...)...,

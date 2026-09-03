@@ -15,6 +15,7 @@ import (
 
 // crashingContainer simulates the process dying partway through an execution by panicking on
 // the nth durable write, so that a fresh execution can be resumed over whatever was committed.
+// A transaction's writes only land once it returns, so a crash inside it commits nothing, like a real backend.
 type crashingContainer struct {
 	*executiontype.InMemoryContainer
 	writes  int
@@ -24,15 +25,40 @@ type crashingContainer struct {
 var errSimulatedCrash = errors.New("simulated crash")
 
 func (c *crashingContainer) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
-	return c.InMemoryContainer.Transact(ctx, func(ctx context.Context, _ executiontype.Container) error { return fn(ctx, c) })
+	return c.InMemoryContainer.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
+		buffered := &crashingTx{Container: tx, c: c, durable: map[string][]byte{}}
+		if err := fn(ctx, buffered); err != nil {
+			return err
+		}
+		for key, value := range buffered.durable {
+			if err := tx.StoreDurable(key, value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
-func (c *crashingContainer) StoreDurable(key string, value []byte) error {
-	c.writes++
-	if c.writes == c.crashAt {
+type crashingTx struct {
+	executiontype.Container
+	c       *crashingContainer
+	durable map[string][]byte
+}
+
+func (tx *crashingTx) LoadDurable(key string) ([]byte, bool, error) {
+	if value, ok := tx.durable[key]; ok {
+		return value, true, nil
+	}
+	return tx.Container.LoadDurable(key)
+}
+
+func (tx *crashingTx) StoreDurable(key string, value []byte) error {
+	tx.c.writes++
+	if tx.c.writes == tx.c.crashAt {
 		panic(errSimulatedCrash)
 	}
-	return c.InMemoryContainer.StoreDurable(key, value)
+	tx.durable[key] = value
+	return nil
 }
 
 // executeUntilCrash runs the flow over c and reports whether it ended in the simulated crash.

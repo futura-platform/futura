@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -405,15 +406,15 @@ func TestInvalidateSequence(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
-		applied, committed := false, 0
-		f.InvalidateSequence(func() { applied = true }, func(executiontype.Container) func() { return func() { committed++ } })
+		applied, writes := false, 0
+		f.InvalidateSequence(func() { applied = true }, func(executiontype.Container) { writes++ })
 		assert.True(t, applied)
 		assert.Equal(t, uint64(0), getEpoch(t, c))
-		assert.Equal(t, 0, committed)
+		assert.Equal(t, 0, writes)
 
 		dirtyEpoch := startReplay(t, f)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
-		assert.Equal(t, 1, committed)
+		assert.Equal(t, containertest.Attempts, writes, "the write runs on every attempt of the committing transaction")
 		// the replay that committed the invalidation was started against the bumped epoch
 		assert.Equal(t, uint64(1), dirtyEpoch)
 	})
@@ -422,17 +423,18 @@ func TestInvalidateSequence(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
 		var order []string
-		f.InvalidateSequence(func() {}, func(tx executiontype.Container) func() {
+		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
+			order = append(order, "first")
 			assert.NoError(t, tx.StoreDurable("first", []byte{1}))
-			return func() { order = append(order, "first") }
 		})
-		f.InvalidateSequence(func() {}, func(tx executiontype.Container) func() {
+		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
+			order = append(order, "second")
 			assert.NoError(t, tx.StoreDurable("second", []byte{2}))
-			return func() { order = append(order, "second") }
 		})
 		startReplay(t, f)
 
-		assert.Equal(t, []string{"first", "second"}, order)
+		// every attempt runs the writes in order
+		assert.Equal(t, slices.Repeat([]string{"first", "second"}, containertest.Attempts), order)
 		for _, key := range []string{"first", "second"} {
 			_, ok, err := c.LoadDurable(key)
 			assert.NoError(t, err)
@@ -444,7 +446,7 @@ func TestInvalidateSequence(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
-		f.InvalidateSequence(func() {}, func(executiontype.Container) func() { return nil })
+		f.InvalidateSequence(func() {}, func(executiontype.Container) {})
 		startReplay(t, f)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
 
@@ -457,24 +459,20 @@ func TestInvalidateSequence(t *testing.T) {
 		strict := containertest.NewStrict(c)
 		f := running(t, NewFlowExecutionWithContainer(strict))
 
-		writes, committed := 0, 0
-		f.InvalidateSequence(func() {}, func(tx executiontype.Container) func() {
+		writes := 0
+		f.InvalidateSequence(func() {}, func(tx executiontype.Container) {
 			writes++
 			assert.NoError(t, tx.StoreDurable("value", []byte{1}))
-			return func() {
-				committed++
-				_, ok, err := c.LoadDurable("value")
-				assert.NoError(t, err)
-				assert.True(t, ok, "onCommit must run after the write is durable")
-			}
 		})
 		dirtyEpoch := startReplay(t, f)
 
 		assert.Equal(t, containertest.Attempts, strict.Calls, "the closure should have run once per attempt")
 		assert.Equal(t, containertest.Attempts, writes, "the write runs on every attempt, against a fresh transaction")
-		assert.Equal(t, 1, committed, "but only the committing attempt's onCommit runs")
-		assert.Equal(t, uint64(1), getEpoch(t, c), "and the epoch is bumped exactly once")
+		assert.Equal(t, uint64(1), getEpoch(t, c), "but the epoch is bumped exactly once")
 		assert.Equal(t, uint64(1), dirtyEpoch)
+		_, ok, err := c.LoadDurable("value")
+		assert.NoError(t, err)
+		assert.True(t, ok)
 	})
 	t.Run("the replay's flags come from the attempt that committed, not an earlier one", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
@@ -502,7 +500,7 @@ func TestInvalidateSequence(t *testing.T) {
 			f.InvalidateSequence(func() {
 				close(applied)
 				<-release // hold the lock with the mutation applied but the invalidation not yet recorded
-			}, func(executiontype.Container) func() { return nil })
+			}, func(executiontype.Container) {})
 		}()
 		<-applied
 
@@ -531,7 +529,7 @@ func TestInvalidateSequence(t *testing.T) {
 		assert.True(t, ok)
 		stop()
 
-		f.InvalidateSequence(func() {}, func(executiontype.Container) func() { return nil })
+		f.InvalidateSequence(func() {}, func(executiontype.Container) {})
 		assert.Equal(t, uint64(0), getEpoch(t, c))
 
 		stop, ok = f.TryStartRun()

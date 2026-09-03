@@ -37,7 +37,7 @@ type FlowExecution struct {
 	// and sync.RWMutex is not reentrant.
 	running bool
 	// pendingInvalidation holds the mutations that invalidate the sequence, in a durable form.
-	pendingInvalidation []func(tx executiontype.Container) (onCommit func())
+	pendingInvalidation []func(tx executiontype.Container)
 	// cancelCurrentReplay cancels the most recently started replay. Protected by mu.
 	cancelCurrentReplay context.CancelCauseFunc
 }
@@ -153,20 +153,16 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	f.cancelCurrentReplay = cancel
 
 	// The transaction may be retried by the container, so it only reads and writes durable state.
-	// In-memory state (the pending queue, and whatever the writes update once committed) is consumed after it commits.
+	// In-memory state (the pending queue) is consumed after it commits.
 	var flags replay.Flags
 	var dirtyEpoch uint64
-	var onCommit []func()
 	err := f.c.Transact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.Container) error {
 		dirtyEpoch = f.getEpoch(tx, dirtyEpochKey)
-		onCommit = nil
 		if len(f.pendingInvalidation) > 0 {
 			dirtyEpoch++
 			f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
 			for _, write := range f.pendingInvalidation {
-				if fn := write(tx); fn != nil {
-					onCommit = append(onCommit, fn)
-				}
+				write(tx)
 			}
 		}
 		flags = replay.Flags{
@@ -179,9 +175,6 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
 	}
 	f.pendingInvalidation = nil
-	for _, fn := range onCommit {
-		fn()
-	}
 
 	return sequence.With(replayCtx, flags), dirtyEpoch
 }
@@ -217,7 +210,7 @@ func namespacedDurableKeyConstructor(namespace string) func(key string) string {
 // write is called with the transaction that commits it, so that the invalidation is never made durable without its mutation.
 // The write func must adhere to the requirements of a transaction callback (it should be replay safe).
 // Nothing is written until the next StartNewReplay call.
-func (f *FlowExecution) InvalidateSequence(apply func(), write func(tx executiontype.Container) (onCommit func())) {
+func (f *FlowExecution) InvalidateSequence(apply func(), write func(tx executiontype.Container)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	apply()

@@ -12,6 +12,7 @@ import (
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
+	"github.com/futura-platform/futura/internal/goroutinebind"
 	"github.com/futura-platform/futura/moment"
 	"github.com/futura-platform/futura/privateencoding"
 )
@@ -35,117 +36,77 @@ func (s stateContainerImplementation[T]) Set(value T) {
 	s.setState(value)
 }
 
-// stateValues holds every State's encoded value for a flow. Set is callable from any goroutine and
-// the loop marshals the map when it commits, so all access goes through the mutex.
-type stateValues struct {
-	mu     sync.RWMutex
-	values map[string][]byte
+func encodeState[T comparable](value T) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := privateencoding.NewEncoder[T](&buffer)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
 }
 
-func (s *stateValues) get(key string) ([]byte, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := s.values[key]
-	return value, ok
+func decodeState[T comparable](data []byte) (T, error) {
+	decoder := privateencoding.NewDecoder[T](bytes.NewReader(data))
+	return decoder.Decode()
 }
-
-func (s *stateValues) set(key string, value []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.values[key] = value
-}
-
-var stateContext = NewDurableHandle(
-	"state",
-	func() *stateValues {
-		return &stateValues{values: map[string][]byte{}}
-	},
-	func(data []byte) (*stateValues, error) {
-		decoder := privateencoding.NewDecoder[map[string][]byte](bytes.NewReader(data))
-		values, err := decoder.Decode()
-		if err != nil {
-			return nil, err
-		}
-		return &stateValues{values: values}, nil
-	},
-	func(s *stateValues) ([]byte, error) {
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		var buffer bytes.Buffer
-		encoder := privateencoding.NewEncoder[map[string][]byte](&buffer)
-		if err := encoder.Encode(s.values); err != nil {
-			return nil, err
-		}
-		return buffer.Bytes(), nil
-	},
-	nil,
-)
-
-var (
-	ErrStateNotFound = errors.New("state not found")
-)
 
 func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateContainer[T] {
 	f := execution.MustFromContext(b)
-	values, persist := stateContext.Use(b)
-
-	encode := func(value T) ([]byte, error) {
-		var buffer bytes.Buffer
-		encoder := privateencoding.NewEncoder[T](&buffer)
-		err := encoder.Encode(value)
-		if err != nil {
-			return nil, err
-		}
-		return buffer.Bytes(), nil
-	}
-
-	stage := func(stateKey string, value []byte) {
-		values.set(stateKey, value)
-	}
 
 	stateKey, err := Step(b, func(ctx context.Context, initialValue T) (string, error) {
-		stateKey := fmt.Sprintf("%T-state[%s](%v)", initialValue, moment.CurrentIdentity(ctx), initialValue)
-		value, err := encode(initialValue)
-		if err != nil {
-			return "", err
-		}
-		stage(stateKey, value)
-		persist()
-		return stateKey, nil
+		return fmt.Sprintf("%T-state[%s](%v)", initialValue, moment.CurrentIdentity(ctx), initialValue), nil
 	}, initialValue, ftype.WithLabel("stateWithInitialValue"))
 	if err != nil {
-		// the seed effect has no error case, this should never happen
+		// the key derivation has no error case, this should never happen
 		panic(ftrerrors.InconsistentStateError(err))
 	}
 
-	return stateContainerImplementation[T]{
-		getValue: func() T {
-			data, ok := values.get(stateKey)
-			if !ok {
-				panic(ftrerrors.InconsistentStateError(fmt.Errorf("%w: %s", ErrStateNotFound, stateKey)))
-			}
-			decoder := privateencoding.NewDecoder[T](bytes.NewReader(data))
-			value, err := decoder.Decode()
-			if err != nil {
-				panic(err)
-			}
-
+	// Set is callable from any goroutine, so the value is loaded once and then guarded.
+	var mu sync.Mutex
+	var loaded bool
+	var value T
+	load := func() T {
+		mu.Lock()
+		defer mu.Unlock()
+		if loaded {
 			return value
-		},
-		setState: func(value T) {
-			encoded, err := encode(value)
-			if err != nil {
+		}
+		data, ok := f.LoadDurable(goroutinebind.BindGoroutine(b), stateKey)
+		if ok {
+			if value, err = decodeState[T](data); err != nil {
 				panic(err)
 			}
-			if current, _ := values.get(stateKey); bytes.Equal(current, encoded) {
+		} else {
+			value = initialValue
+		}
+		loaded = true
+		return value
+	}
+
+	return stateContainerImplementation[T]{
+		getValue: load,
+		setState: func(newValue T) {
+			if load() == newValue {
 				return
+			}
+			encoded, err := encodeState(newValue)
+			if err != nil {
+				panic(err)
 			}
 
 			// The new value is only staged in memory here. It is committed durably, together with the
 			// sequence invalidation, when the next replay starts. This allows for multiple state changes to happen atomically, ensuring durability.
 			f.InvalidateSequence(
-				func() { stage(stateKey, encoded) },
-				func(tx executiontype.Container) func() { return stateContext.WriteTo(b, tx) },
+				func() {
+					mu.Lock()
+					defer mu.Unlock()
+					value = newValue
+				},
+				func(tx executiontype.Container) {
+					if err := tx.StoreDurable(execution.GenericDurableKey(stateKey), encoded); err != nil {
+						panic(err)
+					}
+				},
 			)
 			f.RestartCurrentReplay(errors.New("state updated by setState"))
 		},
