@@ -22,6 +22,7 @@ import (
 var (
 	ErrEvaledOutsideOfAFlowFunction = errors.New("steps cannot be evaluated outside of a replay function")
 	ErrNestedStep                   = errors.New("steps cannot be evaluated from inside another step")
+	ErrStepAfterFailure             = errors.New("steps cannot be evaluated after another step failed in the same replay")
 	ErrUnexpectedBranchTaken        = errors.New("unexpected branch taken, new branches should only be triggered by a futura state change")
 )
 
@@ -66,6 +67,10 @@ func evaluateWithCallstack[A comparable, R any](
 	if moment.IsEvaluating(ctx) {
 		panic(ftrerrors.InconsistentStateError(ErrNestedStep))
 	}
+	// a failed step ends the replay: its error is not memoized, so a branch taken on it cannot be replayed
+	if sequence.HasFailed(ctx) {
+		panic(ftrerrors.InconsistentStateError(ErrStepAfterFailure))
+	}
 	identity := moment.NewIdentity(
 		ctx,
 		replay.CallstackToCallpath(callstack),
@@ -85,6 +90,10 @@ func evaluateWithCallstack[A comparable, R any](
 			slog.String("cache_status", cacheStatus),
 			slog.String("error", fmt.Sprint(err)),
 		)
+		// any exit but a returned output leaves the replay unable to continue past this step
+		if r != nil || err != nil {
+			sequence.MarkFailed(ctx)
+		}
 		if r != nil {
 			panic(r)
 		} else if err != nil {

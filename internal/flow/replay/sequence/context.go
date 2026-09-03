@@ -17,6 +17,8 @@ type state struct {
 	index    int
 	seen     mapset.Set[moment.Identity]
 	deferred *func()
+	// failed is set once a step in this replay has not completed. Nothing after it may evaluate.
+	failed bool
 }
 
 // With wraps the context with a new sequence index.
@@ -44,6 +46,16 @@ func GetIndex(ctx context.Context) int {
 func Advance(ctx context.Context) {
 	s := getSequenceState(ctx)
 	s.index++
+}
+
+// MarkFailed records that a step in this replay did not complete.
+func MarkFailed(ctx context.Context) {
+	getSequenceState(ctx).failed = true
+}
+
+// HasFailed reports whether a step in this replay did not complete.
+func HasFailed(ctx context.Context) bool {
+	return getSequenceState(ctx).failed
 }
 
 func GetFlags(ctx context.Context) replay.Flags {

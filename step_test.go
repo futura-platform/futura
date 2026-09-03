@@ -73,6 +73,58 @@ func TestStep(t *testing.T) {
 			assert.ErrorIs(t, errs[0], context.DeadlineExceeded)
 		})
 	})
+	t.Run("a step evaluated after another step failed in the same replay is rejected", func(t *testing.T) {
+		// A failed step ends the replay: its error is not memoized, so a branch taken on it is not
+		// reproducible. Evaluating another step there would record a path no later replay can follow.
+		t.Run("after an error", func(t *testing.T) {
+			createRan := false
+			_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				v, err := futura.Source(b, func(ctx context.Context) (int, error) { return 0, errors.New("not found") })
+				if err != nil {
+					// the get-or-create shape: tolerating the error and evaluating another step
+					v, err = futura.Source(b, func(ctx context.Context) (int, error) { createRan = true; return 7, nil })
+				}
+				return v, err
+			}, struct{}{})
+			assert.ErrorIs(t, err, futura.ErrFlowPanic)
+			assert.ErrorIs(t, err, step.ErrStepAfterFailure)
+			assert.False(t, createRan)
+		})
+		t.Run("after a panic recovered by the flow", func(t *testing.T) {
+			secondRan := false
+			_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				func() {
+					defer func() { recover() }()
+					futura.Action(b, func(ctx context.Context) error { panic("boom") })
+				}()
+				return 0, futura.Action(b, func(ctx context.Context) error { secondRan = true; return nil })
+			}, struct{}{})
+			assert.ErrorIs(t, err, futura.ErrFlowPanic)
+			assert.ErrorIs(t, err, step.ErrStepAfterFailure)
+			assert.False(t, secondRan)
+		})
+		t.Run("the next replay starts clean", func(t *testing.T) {
+			// the flag is per replay: a failed step followed by a return is the normal retry path
+			attempts := 0
+			r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				v, err := futura.Source(b, func(ctx context.Context) (int, error) {
+					attempts++
+					if attempts == 1 {
+						return 0, errors.New("transient")
+					}
+					return 1, nil
+				})
+				if err != nil {
+					return 0, err
+				}
+				w, err := futura.Source(b, func(ctx context.Context) (int, error) { return 2, nil })
+				return v + w, err
+			}, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, 3, r)
+			assert.Equal(t, 2, attempts)
+		})
+	})
 	t.Run("a step evaluated from inside another step is rejected", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		nest := true
