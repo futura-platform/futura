@@ -36,6 +36,9 @@ type FlowExecution struct {
 	// to Transact / ReadTransact, as those hold mu.Lock / mu.RLock respectively
 	// and sync.RWMutex is not reentrant.
 	running bool
+	// run counts the executions started on this FlowExecution, so that what one execution
+	// resolved can be told apart from the next. Protected by mu.
+	run uint64
 	// dirty holds the durable values written behind, until the next replay flushes them. Protected by mu.
 	dirty map[string][]byte
 	// cancelCurrentReplay cancels the most recently started replay. Protected by mu.
@@ -326,6 +329,13 @@ func (f *FlowExecution) StoreDurable(ctx context.Context, durableKey string, sta
 	})
 }
 
+// Run identifies the execution in flight, or the last one if none is. It starts at 1.
+func (f *FlowExecution) Run() uint64 {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.run
+}
+
 // Running reports whether an execution is currently active on this FlowExecution.
 // It is set to true by TryStartRun and back to false by the stop func it returns.
 func (f *FlowExecution) Running() bool {
@@ -344,6 +354,7 @@ func (f *FlowExecution) TryStartRun() (stop func(), ok bool) {
 		return nil, false
 	}
 	f.running = true
+	f.run++
 	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()

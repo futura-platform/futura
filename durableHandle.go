@@ -55,6 +55,8 @@ func NewDurableHandle[T any](
 type durableResolver[T any] struct {
 	handleId int32
 	cleanup  func(*T) error
+	// run is the execution this resolver was made for. Its value is only meaningful there.
+	run uint64
 
 	// durableMu protects the resolver state below. It is shared across resolve and
 	// persist calls, so that remote checksum state stays canonical across multiple
@@ -177,10 +179,12 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 
 	// either load the existing resolver, or create a new one.
 	// the cache cleans its resolvers up when the execution ends.
+	run := execution.MustFromContext(ctx).Run()
 	anyResolver, _ := handles.LoadOrCompute(d.key, func() (any, bool) {
 		return &durableResolver[T]{
 			handleId: d.id,
 			cleanup:  d.cleanup,
+			run:      run,
 		}, false
 	})
 	return context.WithValue(ctx, d.key, anyResolver.(*durableResolver[T]))
@@ -189,10 +193,11 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 var (
 	ErrDurableResolverNotFound = errors.New("durable resolver not found")
 	ErrDurableResolverMismatch = errors.New("durable resolver mismatch")
+	ErrDurableResolverStale    = errors.New("durable resolver belongs to an execution that has ended")
 )
 
 // Use returns a reference to the durable value, and a function to persist the changes to the durable value.
-// Persist should ALWAYS be called at some point after the ref is mutated.
+// Persist should ALWAYS be called at some point after the ref is mutated, before the run ends.
 // Persist will return true if the value was changed, and false if it was not.
 // If persist returns false, that also implies that the StoreDurable call was skipped.
 // Not doing so can cause the changes to be lost in the event of a failure.
@@ -212,6 +217,9 @@ func (d *DurableHandle[T]) Use(ctx context.Context) (ref *T, persist func() (did
 		// persist is callable anywhere, so we need to temporarily bind to the current goroutine to allow the store to happen.
 		boundCtx := goroutinebind.BindGoroutine(ctx)
 		exec := execution.MustFromContext(boundCtx)
+		if exec.Run() != r.run {
+			panic(fmt.Errorf("%w: %s", ErrDurableResolverStale, d.key))
+		}
 
 		r.durableMu.Lock()
 		defer r.durableMu.Unlock()

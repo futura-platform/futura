@@ -465,6 +465,49 @@ func TestDurableHandle(t *testing.T) {
 		assert.Equal(t, []byte{byte(77)}, value)
 	})
 
+	t.Run("persist from a previous execution cannot write into the current one", func(t *testing.T) {
+		// A handle's value belongs to the execution that resolved it. A persist func held across
+		// executions carries a value from a timeline that has ended; it must be refused, not
+		// written over whatever the current execution has since stored.
+		const durableKey = "persistAcrossExecutionsHandle"
+		h := NewDurableHandle(
+			durableKey,
+			func() *byte { v := byte(0); return &v },
+			func(input []byte) (*byte, error) { v := input[0]; return &v, nil },
+			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
+			nil,
+		)
+
+		c := executiontype.NewInMemoryContainer()
+		f := NewFlowFromContainer[struct{}, int](containertest.NewStrict(c))
+		var stalePersist func() bool
+		var staleRef *byte
+		_, err := f.Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			b = h.Provide(b)
+			staleRef, stalePersist = h.Use(b)
+			*staleRef = 1
+			stalePersist()
+			return 0, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+
+		_, err = f.Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			b = h.Provide(b)
+			ref, persist := h.Use(b)
+			*ref = 2
+			persist()
+			*staleRef = 9
+			testutil.PanicsWithErrorIs(t, ErrDurableResolverStale, func() { stalePersist() })
+			return 0, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+
+		stored, ok, err := c.LoadDurable(execution.GenericDurableKey(durableKey))
+		assert.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, []byte{2}, stored, "the current execution's value stands")
+	})
+
 	t.Run("persist panics if invoked after the execution has stopped running", func(t *testing.T) {
 		// The persist closure becomes unsafe to call once the FlowExecution it
 		// belongs to has stopped running, because anything stored at that point
