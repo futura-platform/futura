@@ -125,6 +125,27 @@ func TestFlow(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "fn2", r)
 	})
+	t.Run("layered keys do not collide with each other or with a single key", func(t *testing.T) {
+		calls := 0
+		r, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+			step := func(b futura.FlowBuilder) error {
+				return futura.Action(b, func(ctx context.Context) error { calls++; return nil })
+			}
+			for _, kb := range []futura.FlowBuilder{
+				b.WithKey("a-b").WithKey("c"),
+				b.WithKey("a").WithKey("b-c"),
+				b.WithKey("a-b-c"),
+			} {
+				if err := step(kb); err != nil {
+					return "", err
+				}
+			}
+			return "done", nil
+		}, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, "done", r)
+		assert.Equal(t, 3, calls)
+	})
 	t.Run("A single keyed moment identity should be able to be used with a single moment function, and have memoization keyed by the identity key", func(t *testing.T) {
 		expectedExecCount := 10
 		execCount := 0
