@@ -17,6 +17,10 @@ type CallableFlow[A, T any] func(ctx context.Context, args A) (T, error)
 
 var (
 	ErrOccurredOutsideOfEvaluation = errors.New("error occurred outside of step evaluation")
+	// ErrReplayEnded is the cause a replay is cancelled with once it has run to completion.
+	ErrReplayEnded = errors.New("the replay has ended")
+	// ErrStaleReplay reports that the flow used a builder from a replay other than the one running.
+	ErrStaleReplay = errors.New("a builder from a replay that has ended was used")
 )
 
 // Loop implements the core logic of the flow. It is responsible for:
@@ -47,7 +51,7 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		var dirtyEpoch uint64
 		replayCtx, dirtyEpoch = f.StartNewReplay(ctx)
 		result, err := executeReplay(replayCtx, callableFlow, args)
-		replay.Cancel(replayCtx, nil)
+		replay.Cancel(replayCtx, ErrReplayEnded)
 
 		switch {
 		case ctx.Err() != nil:
@@ -84,10 +88,16 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 
 // executeReplay wraps the replay execution to catch termination panics,
 // and converts them into normal, returned, cancellation errors.
+// A termination is only this replay's if it observed this replay: one that observed another
+// (the flow used a builder from a replay that has ended) is a fault in the flow.
 func executeReplay[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A) (result T, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			if cause, ok := r.(error); ok && errors.Is(cause, step.ErrReplayTerminated) {
+			if terminated, ok := r.(step.ReplayTerminatedError); ok {
+				if !replay.Same(terminated.Replay, ctx) {
+					err = fmt.Errorf("%w: %w", ErrStaleReplay, terminated)
+					return
+				}
 				err = context.Cause(ctx)
 				return
 			}

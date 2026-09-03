@@ -9,6 +9,7 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/flow"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/step"
@@ -51,6 +52,48 @@ func TestFlow(t *testing.T) {
 		})
 		assert.ErrorIs(t, err, futura.ErrFlowPanic)
 		assert.ErrorIs(t, err, execution.ErrFlowExecutionNotRunning)
+	})
+	t.Run("a builder from a replay that has ended cannot be used for a step", func(t *testing.T) {
+		// Its replay is over, so a step through it has nothing to record into. It must be rejected,
+		// never reported as a clean completion of the replay that is actually running.
+		useStale := func(t *testing.T, endFirstReplay func(b futura.FlowBuilder) error) error {
+			t.Helper()
+			var stale *futura.FlowBuilder
+			ran, replays := false, 0
+			r, err := futura.NewFlowFromContainer[*any, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (int, error) {
+				replays++
+				if replays == 1 {
+					held := b
+					stale = &held
+					return 0, endFirstReplay(b)
+				}
+				v, err := futura.Step(*stale, func(ctx context.Context, _ struct{}) (int, error) {
+					ran = true
+					return 42, nil
+				}, struct{}{})
+				if err != nil {
+					return -1, err
+				}
+				return v, nil
+			}, nil)
+			assert.False(t, ran)
+			assert.Equal(t, 0, r)
+			return err
+		}
+		t.Run("ended by a restart", func(t *testing.T) {
+			err := useStale(t, func(b futura.FlowBuilder) error {
+				futura.State(b, false).Set(true)
+				return nil
+			})
+			assert.ErrorIs(t, err, flow.ErrStaleReplay)
+		})
+		t.Run("ended by a failed step", func(t *testing.T) {
+			err := useStale(t, func(b futura.FlowBuilder) error {
+				return futura.Action(b, func(ctx context.Context) error { return errors.New("retry") })
+			})
+			assert.ErrorIs(t, err, flow.ErrStaleReplay)
+			assert.ErrorIs(t, err, flow.ErrReplayEnded)
+		})
 	})
 	t.Run("do not execute a flow more than once concurrently", func(t *testing.T) {
 		fnEntered := make(chan struct{})

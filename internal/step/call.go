@@ -60,8 +60,23 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 // propagate the error through user code.
 var ErrReplayTerminated = errors.New("replay terminated")
 
+// ReplayTerminatedError is the panic that terminates a replay. It records which replay was
+// observed as cancelled, since a step may have been reached through a builder from another replay.
+type ReplayTerminatedError struct {
+	// Replay is the context of the replay that was observed as cancelled.
+	Replay context.Context
+}
+
+func (e ReplayTerminatedError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrReplayTerminated, replay.Cause(e.Replay))
+}
+
+func (e ReplayTerminatedError) Is(target error) bool { return target == ErrReplayTerminated }
+
+func (e ReplayTerminatedError) Unwrap() error { return replay.Cause(e.Replay) }
+
 func terminateIfReplayCancelled(ctx context.Context) {
 	if replay.Err(ctx) != nil {
-		panic(ErrReplayTerminated)
+		panic(ReplayTerminatedError{Replay: ctx})
 	}
 }

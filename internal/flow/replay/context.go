@@ -36,3 +36,25 @@ func Err(ctx context.Context) error {
 	}
 	return replay.Err()
 }
+
+// Cause returns why the replay that ctx belongs to was cancelled, or nil if it was not.
+func Cause(ctx context.Context) error {
+	replay, ok := ctx.Value(replayKey).(replayContext)
+	if !ok {
+		panic("replay not found")
+	}
+	return context.Cause(replay)
+}
+
+// Same reports whether a and b belong to the same replay.
+func Same(a, b context.Context) bool {
+	ra, ok := a.Value(replayKey).(replayContext)
+	if !ok {
+		panic("replay not found")
+	}
+	rb, ok := b.Value(replayKey).(replayContext)
+	if !ok {
+		panic("replay not found")
+	}
+	return ra.Context == rb.Context
+}
