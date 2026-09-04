@@ -20,8 +20,7 @@ func initializeSession(ctx context.Context, _ struct{}) error {
 		return fmt.Errorf("failed to parse session init location: %w", err)
 	}
 
-	httpClient, persistCookies := useHttpClient(ctx)
-	defer persistCookies()
+	httpClient := useHttpClient(ctx)
 
 	var cookies []*network.Cookie
 	var hasDataVed bool

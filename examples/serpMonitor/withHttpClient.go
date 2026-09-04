@@ -51,20 +51,14 @@ var serpMonitorHTTPTransport = &http.Transport{
 }
 
 // withHttpClient provides the durable cookie jar resolver to the flow.
-// Call useHttpClient(ctx) inside steps/effects to retrieve a client and persist func.
+// Call useHttpClient(ctx) inside steps/effects to retrieve a client whose cookies are durable.
 func withHttpClient(b futura.FlowBuilder) futura.FlowBuilder {
 	return serpMonitorCookieJarHandle.Provide(b)
 }
 
-func useHttpClient(ctx context.Context) (client *http.Client, persistCookies func() bool) {
-	b, ok := ctx.(futura.FlowBuilder)
-	if !ok {
-		panic("useHttpClient must be called from within a futura flow")
-	}
-
-	jar, persist := serpMonitorCookieJarHandle.Use(b)
+func useHttpClient(ctx context.Context) *http.Client {
 	return &http.Client{
 		Transport: serpMonitorHTTPTransport,
-		Jar:       jar,
-	}, persist
+		Jar:       serpMonitorCookieJarHandle.Use(ctx),
+	}
 }

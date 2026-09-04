@@ -3,7 +3,6 @@ module github.com/futura-platform/futura
 go 1.25.3
 
 require (
-	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/deckarep/golang-set/v2 v2.8.0
 	github.com/petermattis/goid v0.0.0-20251121121749-a11dd1a45f9a
 	github.com/puzpuzpuz/xsync/v4 v4.4.0

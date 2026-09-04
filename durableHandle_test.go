@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,8 +29,11 @@ type storeCountingTx struct {
 	storeCalls *atomic.Int32
 }
 
+// StoreDurable counts the stores of handle values; a durable boundary also writes the execution's epochs.
 func (tx *storeCountingTx) StoreDurable(key string, value []byte) error {
-	tx.storeCalls.Add(1)
+	if strings.HasPrefix(key, execution.GenericDurableKey("")) {
+		tx.storeCalls.Add(1)
+	}
 	return tx.InMemoryContainer.StoreDurable(key, value)
 }
 
@@ -47,12 +51,18 @@ func (c *storeCountingContainer) ReadTransact(ctx context.Context, fn func(ctx c
 func newDurableTestBuilder(t *testing.T, exec *execution.FlowExecution, providers ...func(FlowBuilder) FlowBuilder) FlowBuilder {
 	t.Helper()
 	startExecRun(t, exec)
-	ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
+	ctx := durable.WithHandles(execution.WithFlow(t.Context(), exec), exec.Handles())
 	b := newFlowBuilder(ctx, exec)
 	for _, provide := range providers {
 		b = provide(b)
 	}
 	return b
+}
+
+// boundary reaches a durable boundary without a loop: it starts a replay on exec, which commits every
+// pending change the same way a step's memo does.
+func boundary(exec *execution.FlowExecution, ctx context.Context) {
+	exec.StartNewReplay(ctx)
 }
 
 // startExecRun marks exec as running for the duration of the test, so that
@@ -111,24 +121,24 @@ func TestDurableHandle(t *testing.T) {
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, handle.Provide)
 
-		ref, persist := handle.Use(b)
+		ref := handle.Use(b)
 		assert.Equal(t, expectedValue, *ref)
 
-		// does not store anything until persisted
+		// does not store anything until a durable boundary
 		_, ok, err := c.LoadDurable(execution.GenericDurableKey("firstHandle"))
 		assert.NoError(t, err)
 		assert.False(t, ok)
 
 		// returns the correct value after a change
 		*ref = byte(101)
-		persist()
+		boundary(exec, b)
 
 		value, ok, err := c.LoadDurable(execution.GenericDurableKey("firstHandle"))
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, []byte{byte(101)}, value)
 
-		ref, _ = handle.Use(b)
+		ref = handle.Use(b)
 		assert.Equal(t, byte(101), *ref)
 
 		// returns the correct value in a copy of the previous execution container
@@ -141,11 +151,11 @@ func TestDurableHandle(t *testing.T) {
 
 		execCopy := execution.NewFlowExecutionWithContainer(containertest.NewStrict(copy))
 		bCopy := newDurableTestBuilder(t, execCopy, handle.Provide)
-		ref, _ = handle.Use(bCopy)
+		ref = handle.Use(bCopy)
 		assert.Equal(t, byte(101), *ref)
 	})
 
-	t.Run("persist only stores when value changes", func(t *testing.T) {
+	t.Run("a boundary only stores the value when it changed", func(t *testing.T) {
 		const durableKey = "persistOptimizationHandle"
 
 		h := NewDurableHandle[byte](
@@ -170,12 +180,11 @@ func TestDurableHandle(t *testing.T) {
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(counting))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
-		ref, persist := h.Use(b)
+		ref := h.Use(b)
 		assert.Equal(t, byte(42), *ref)
 
 		// no change is a no-op
-		didChange := persist()
-		assert.False(t, didChange)
+		boundary(exec, b)
 		assert.Equal(t, int32(0), counting.storeCalls.Load())
 
 		value, ok, err := inner.LoadDurable(execution.GenericDurableKey(durableKey))
@@ -186,12 +195,10 @@ func TestDurableHandle(t *testing.T) {
 		// change stores once, then becomes a no-op
 		*ref = byte(43)
 
-		didChange = persist()
-		assert.True(t, didChange)
+		boundary(exec, b)
 		assert.Equal(t, int32(1), counting.storeCalls.Load())
 
-		didChange = persist()
-		assert.False(t, didChange)
+		boundary(exec, b)
 		assert.Equal(t, int32(1), counting.storeCalls.Load())
 
 		value, ok, err = inner.LoadDurable(execution.GenericDurableKey(durableKey))
@@ -227,16 +234,16 @@ func TestDurableHandle(t *testing.T) {
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, callsHandle.Provide)
 
-		ref1, persist := callsHandle.Use(b)
+		ref1 := callsHandle.Use(b)
 		assert.Equal(t, 7, *ref1)
 		assert.Equal(t, 1, constructorCalls)
 		assert.Equal(t, 0, unmarshalCalls)
 		assert.Equal(t, 0, marshalCalls)
 
-		persist()
+		boundary(exec, b)
 		assert.Equal(t, 1, marshalCalls)
 
-		ref2, _ := callsHandle.Use(b)
+		ref2 := callsHandle.Use(b)
 		assert.Same(t, ref1, ref2)
 		assert.Equal(t, 7, *ref2)
 		assert.Equal(t, 1, constructorCalls)
@@ -263,14 +270,14 @@ func TestDurableHandle(t *testing.T) {
 
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		startExecRun(t, exec)
-		flowCtx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
+		flowCtx := durable.WithHandles(execution.WithFlow(t.Context(), exec), exec.Handles())
 
 		replayOneBuilder := h.Provide(newFlowBuilder(flowCtx, exec))
-		refOne, _ := h.Use(replayOneBuilder)
+		refOne := h.Use(replayOneBuilder)
 		*refOne = 22
 
 		replayTwoBuilder := h.Provide(newFlowBuilder(flowCtx, exec))
-		refTwo, _ := h.Use(replayTwoBuilder)
+		refTwo := h.Use(replayTwoBuilder)
 
 		assert.Same(t, refOne, refTwo)
 		assert.Equal(t, 22, *refTwo)
@@ -305,84 +312,16 @@ func TestDurableHandle(t *testing.T) {
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
-		ref1, _ := h.Use(b)
+		ref1 := h.Use(b)
 		assert.Equal(t, 42, *ref1)
 		assert.Equal(t, 0, constructorCalls)
 		assert.Equal(t, 1, unmarshalCalls)
 
-		ref2, _ := h.Use(b)
+		ref2 := h.Use(b)
 		assert.Same(t, ref1, ref2)
 		assert.Equal(t, 42, *ref2)
 		assert.Equal(t, 0, constructorCalls)
 		assert.Equal(t, 1, unmarshalCalls)
-	})
-
-	t.Run("persist should store if value changed even when using a new persist func", func(t *testing.T) {
-		const durableKey = "newPersistFuncStores"
-
-		h := NewDurableHandle[int](
-			durableKey,
-			func() *int {
-				v := 0
-				return &v
-			},
-			func(input []byte) (*int, error) {
-				v := int(input[0])
-				return &v, nil
-			},
-			func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
-			nil,
-		)
-
-		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
-		b := newDurableTestBuilder(t, exec, h.Provide)
-
-		ref, _ := h.Use(b)
-		*ref = 9
-
-		// Get a new persist func after mutation; this must still store.
-		_, persist2 := h.Use(b)
-		didChange := persist2()
-		assert.True(t, didChange)
-
-		serialized, ok, err := c.LoadDurable(execution.GenericDurableKey(durableKey))
-		assert.NoError(t, err)
-		assert.True(t, ok)
-		assert.Equal(t, []byte{byte(9)}, serialized)
-	})
-
-	t.Run("persist remains optimized across multiple Use calls", func(t *testing.T) {
-		const durableKey = "persistOptimizationAcrossUse"
-
-		h := NewDurableHandle[byte](
-			durableKey,
-			func() *byte {
-				v := byte(0)
-				return &v
-			},
-			func(input []byte) (*byte, error) {
-				v := input[0]
-				return &v, nil
-			},
-			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
-			nil,
-		)
-
-		inner := executiontype.NewInMemoryContainer()
-		counting := &storeCountingContainer{inner: inner}
-		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(counting))
-		b := newDurableTestBuilder(t, exec, h.Provide)
-
-		ref1, persist1 := h.Use(b)
-		*ref1 = byte(1)
-		assert.True(t, persist1())
-		assert.Equal(t, int32(1), counting.storeCalls.Load())
-
-		// New persist func, no further changes => no extra store.
-		_, persist2 := h.Use(b)
-		assert.False(t, persist2())
-		assert.Equal(t, int32(1), counting.storeCalls.Load())
 	})
 
 	t.Run("panics if unmarshal returns an error", func(t *testing.T) {
@@ -415,139 +354,6 @@ func TestDurableHandle(t *testing.T) {
 		assert.Equal(t, 1, unmarshalCalls)
 	})
 
-	t.Run("persist can be called from a different goroutine than Use", func(t *testing.T) {
-		// The persist closure must be safely callable from any goroutine, even
-		// though the underlying execution context is bound to the goroutine
-		// that created it. persist re-binds the context to its own goroutine
-		// before touching the execution container; without that rebind,
-		// MustFromContext would panic via AssertBoundGoroutine.
-		const durableKey = "persistCrossGoroutineHandle"
-
-		h := NewDurableHandle(
-			durableKey,
-			func() *byte {
-				v := byte(0)
-				return &v
-			},
-			func(input []byte) (*byte, error) {
-				v := input[0]
-				return &v, nil
-			},
-			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
-			nil,
-		)
-
-		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
-		b := newDurableTestBuilder(t, exec, h.Provide)
-
-		ref, persist := h.Use(b)
-		*ref = byte(77)
-
-		var (
-			didChange     bool
-			persistErr    any
-			persistDoneWg sync.WaitGroup
-		)
-		persistDoneWg.Go(func() {
-			assert.NotPanics(t, func() {
-				didChange = persist()
-			})
-		})
-		persistDoneWg.Wait()
-
-		assert.Nil(t, persistErr, "persist should not panic when called from a different goroutine")
-		assert.True(t, didChange)
-
-		value, ok, err := c.LoadDurable(execution.GenericDurableKey(durableKey))
-		assert.NoError(t, err)
-		assert.True(t, ok)
-		assert.Equal(t, []byte{byte(77)}, value)
-	})
-
-	t.Run("persist from a previous execution cannot write into the current one", func(t *testing.T) {
-		// A handle's value belongs to the execution that resolved it. A persist func held across
-		// executions carries a value from a timeline that has ended; it must be refused, not
-		// written over whatever the current execution has since stored.
-		const durableKey = "persistAcrossExecutionsHandle"
-		h := NewDurableHandle(
-			durableKey,
-			func() *byte { v := byte(0); return &v },
-			func(input []byte) (*byte, error) { v := input[0]; return &v, nil },
-			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
-			nil,
-		)
-
-		c := executiontype.NewInMemoryContainer()
-		f := NewFlowFromContainer[struct{}, int](containertest.NewStrict(c))
-		var stalePersist func() bool
-		var staleRef *byte
-		_, err := f.Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
-			b = h.Provide(b)
-			staleRef, stalePersist = h.Use(b)
-			*staleRef = 1
-			stalePersist()
-			return 0, nil
-		}, struct{}{})
-		assert.NoError(t, err)
-
-		_, err = f.Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
-			b = h.Provide(b)
-			ref, persist := h.Use(b)
-			*ref = 2
-			persist()
-			*staleRef = 9
-			testutil.PanicsWithErrorIs(t, ErrDurableResolverStale, func() { stalePersist() })
-			return 0, nil
-		}, struct{}{})
-		assert.NoError(t, err)
-
-		stored, ok, err := c.LoadDurable(execution.GenericDurableKey(durableKey))
-		assert.NoError(t, err)
-		assert.True(t, ok)
-		assert.Equal(t, []byte{2}, stored, "the current execution's value stands")
-	})
-
-	t.Run("persist panics if invoked after the execution has stopped running", func(t *testing.T) {
-		// The persist closure becomes unsafe to call once the FlowExecution it
-		// belongs to has stopped running, because anything stored at that point
-		// would escape the cleanup hook and silently corrupt the container for
-		// any subsequent replay. The check lives in execution.FromContext via
-		// the running flag; this test exercises that path through persist.
-		const durableKey = "persistAfterStopHandle"
-
-		h := NewDurableHandle(
-			durableKey,
-			func() *byte { v := byte(0); return &v },
-			func(input []byte) (*byte, error) { v := input[0]; return &v, nil },
-			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
-			nil,
-		)
-
-		c := executiontype.NewInMemoryContainer()
-		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
-		stop, ok := exec.TryStartRun()
-		assert.True(t, ok)
-		ctx := durable.WithHandlesCache()(execution.WithFlow(t.Context(), exec))
-		b := h.Provide(newFlowBuilder(ctx, exec))
-
-		ref, persist := h.Use(b)
-		*ref = byte(1)
-		assert.True(t, persist())
-
-		stop()
-		*ref = byte(2)
-		testutil.PanicsWithErrorIs(t, execution.ErrFlowExecutionNotRunning, func() {
-			persist()
-		})
-
-		stored, ok, err := c.LoadDurable(execution.GenericDurableKey(durableKey))
-		assert.NoError(t, err)
-		assert.True(t, ok)
-		assert.Equal(t, []byte{byte(1)}, stored,
-			"the post-stop persist must not have stored the new value")
-	})
-
 	t.Run("panics if marshal returns an error", func(t *testing.T) {
 		expectedErr := errors.New("marshal failed")
 		marshalCalls := 0
@@ -572,8 +378,8 @@ func TestDurableHandle(t *testing.T) {
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
 		b := newDurableTestBuilder(t, exec, errHandle.Provide)
 
-		_, persist := errHandle.Use(b)
-		testutil.PanicsWithErrorIs(t, expectedErr, func() { persist() })
+		errHandle.Use(b)
+		testutil.PanicsWithErrorIs(t, expectedErr, func() { boundary(exec, b) })
 		assert.Equal(t, 1, marshalCalls)
 
 		_, ok, err := c.LoadDurable(execution.GenericDurableKey("marshalErrHandle"))
@@ -627,14 +433,12 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 				wg.Go(func() {
 					gctx, done := BindToGoroutine(ctx)
 					defer done()
-					ref, persist := a.Use(a.ProvideContext(gctx))
+					ref := a.Use(a.ProvideContext(gctx))
 					*ref = 1
-					persist()
 					aCleanup.Use(aCleanup.ProvideContext(gctx))
 				})
-				ref, persist := c.Use(c.ProvideContext(ctx))
+				ref := c.Use(c.ProvideContext(ctx))
 				*ref = 2
-				persist()
 				wg.Wait()
 				return nil
 			})
@@ -667,10 +471,9 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		r, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
 			replays++
 			b = h.Provide(b)
-			ref, persist := h.Use(b)
+			ref := h.Use(b)
 			if replays == 1 {
 				*ref = 7
-				persist()
 				// replay once more, so that cleanup is proven to run per execution rather than per replay
 				return 0, Action(b, func(ctx context.Context) error { return errors.New("retry") })
 			}
@@ -704,7 +507,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 
 		var optionCtx context.Context
 		_, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
-			_, _ = h.Use(optionCtx)
+			h.Use(optionCtx)
 			return 0, nil
 		}, struct{}{}, func(ctx context.Context) context.Context {
 			optionCtx = h.ProvideContext(ctx)
@@ -741,11 +544,11 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newDurableTestBuilder(t, exec, h.Provide)
-		ref, _ := h.Use(b)
+		ref := h.Use(b)
 		usedPtr = ref
 		*ref = 7
 
-		err := durable.CleanupHandles(b)
+		err := execution.MustFromContext(b).Handles().Cleanup()
 		assert.NoError(t, err)
 		assert.Equal(t, 1, cleanupCalls)
 		assert.Same(t, usedPtr, cleanedPtr)
@@ -773,7 +576,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newDurableTestBuilder(t, exec, h.Provide)
-		err := durable.CleanupHandles(b)
+		err := execution.MustFromContext(b).Handles().Cleanup()
 		assert.NoError(t, err)
 		assert.Equal(t, 0, cleanupCalls)
 	})
@@ -799,15 +602,15 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 
 		exec := execution.NewFlowExecutionWithContainer(containertest.NewInMemory())
 		b := newDurableTestBuilder(t, exec, h.Provide)
-		_, _ = h.Use(b)
+		h.Use(b)
 
-		err := durable.CleanupHandles(b)
+		err := execution.MustFromContext(b).Handles().Cleanup()
 		assert.NoError(t, err)
 		assert.Equal(t, 1, cleanupCalls)
 	})
 }
 
-func TestDurableHandle_Persist(t *testing.T) {
+func TestDurableHandle_Boundary(t *testing.T) {
 	newByteHandle := func(key string) *DurableHandle[byte] {
 		return NewDurableHandle[byte](key,
 			func() *byte {
@@ -831,16 +634,16 @@ func TestDurableHandle_Persist(t *testing.T) {
 		return value, ok
 	}
 
-	t.Run("persist survives the container retrying the transaction", func(t *testing.T) {
-		h := newByteHandle("persistRetryingHandle")
+	t.Run("a change survives the container retrying the transaction", func(t *testing.T) {
+		h := newByteHandle("boundaryRetryingHandle")
 		c := executiontype.NewInMemoryContainer()
 		strict := containertest.NewStrict(c)
 		exec := execution.NewFlowExecutionWithContainer(strict)
 		b := newDurableTestBuilder(t, exec, h.Provide)
 
-		ref, persist := h.Use(b)
+		ref := h.Use(b)
 		*ref = byte(5)
-		assert.True(t, persist())
+		boundary(exec, b)
 
 		value, ok := storedValue(t, c, h)
 		assert.True(t, ok)

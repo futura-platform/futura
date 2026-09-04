@@ -579,9 +579,9 @@ func TestDurable(t *testing.T) {
 		_, ok := f.LoadDurable(ctx, "notFound")
 		assert.False(t, ok)
 	})
-	t.Run("can store and load a value", func(t *testing.T) {
+	t.Run("loads a stored value", func(t *testing.T) {
 		value := byte(100)
-		f.StoreDurable(ctx, "test", []byte{value})
+		assert.NoError(t, c.StoreDurable(GenericDurableKey("test"), []byte{value}))
 		loaded, ok := f.LoadDurable(ctx, "test")
 		assert.True(t, ok)
 		assert.Equal(t, loaded, []byte{value})

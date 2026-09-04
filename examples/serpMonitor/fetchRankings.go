@@ -24,8 +24,7 @@ type fetchRankingsParams struct {
 }
 
 func fetchRankings(ctx context.Context, p fetchRankingsParams) (seal.Sealed[serpRankings], error) {
-	httpClient, persistCookies := useHttpClient(ctx)
-	defer persistCookies()
+	httpClient := useHttpClient(ctx)
 
 	request, err := http.NewRequest("GET", "https://www.google.com/search?q="+p.term, nil)
 	if err != nil {

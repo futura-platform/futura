@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-
-	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/flowhooks"
 )
 
 type handlesContextKey string
@@ -24,15 +21,32 @@ type Cleaner interface {
 	Cleanup() error
 }
 
-// Handles is the execution's cache of resolved handles, one per key, in the order they were provided.
+// Flusher is implemented by a cached handle whose value is committed at the execution's durable boundaries.
+type Flusher interface {
+	// Flush returns the handle's value if it changed since it was last flushed.
+	Flush() (value []byte, changed bool)
+}
+
+// Handle is a resolved handle: what the cache flushes at every durable boundary and cleans up at the end.
+type Handle interface {
+	Cleaner
+	Flusher
+}
+
+// Handles is an execution's cache of resolved handles, one per key, in the order they were provided.
+// The execution flushes it at every durable boundary, and cleans it up at its end.
 type Handles struct {
 	mu    sync.Mutex
-	byKey map[HandleKey]any
+	byKey map[HandleKey]Handle
 	order []HandleKey
 }
 
+func NewHandles() *Handles {
+	return &Handles{byKey: map[HandleKey]Handle{}}
+}
+
 // LoadOrCompute returns the handle cached under key, computing and caching it if there is none.
-func (h *Handles) LoadOrCompute(key HandleKey, compute func() any) any {
+func (h *Handles) LoadOrCompute(key HandleKey, compute func() Handle) Handle {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if handle, ok := h.byKey[key]; ok {
@@ -44,45 +58,39 @@ func (h *Handles) LoadOrCompute(key HandleKey, compute func() any) any {
 	return handle
 }
 
+// Flush returns the value of every cached handle that changed since it was last flushed, by key.
+func (h *Handles) Flush() map[string][]byte {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	changed := map[string][]byte{}
+	for _, key := range h.order {
+		if value, ok := h.byKey[key].Flush(); ok {
+			changed[string(key)] = value
+		}
+	}
+	return changed
+}
+
 // Cleanup releases every cached handle that has something to release, in LIFO order.
 func (h *Handles) Cleanup() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var err error
 	for i := len(h.order) - 1; i >= 0; i-- {
-		if cleaner, ok := h.byKey[h.order[i]].(Cleaner); ok {
-			err = errors.Join(err, cleaner.Cleanup())
-		}
+		err = errors.Join(err, h.byKey[h.order[i]].Cleanup())
 	}
 	return err
 }
 
-// WithHandlesCache gives the execution a cache of resolved handles.
-// The cache is what the execution cleans up at its end, so a handle's cleanup runs regardless
-// of where in the execution the handle was provided.
-func WithHandlesCache() ftype.FlowLoopOption {
-	return func(ctx context.Context) context.Context {
-		_, alreadyExists := GetHandles(ctx)
-		if alreadyExists {
-			panic(ErrHandlesAlreadyExists)
-		}
-
-		return flowhooks.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
-			return CleanupHandles(ctx)
-		})(context.WithValue(ctx, handlesKey, &Handles{byKey: map[HandleKey]any{}}))
+// WithHandles puts an execution's cache of handles on ctx, for handles to resolve themselves through.
+func WithHandles(ctx context.Context, handles *Handles) context.Context {
+	if _, alreadyExists := GetHandles(ctx); alreadyExists {
+		panic(ErrHandlesAlreadyExists)
 	}
+	return context.WithValue(ctx, handlesKey, handles)
 }
 
 func GetHandles(ctx context.Context) (*Handles, bool) {
 	h, ok := ctx.Value(handlesKey).(*Handles)
 	return h, ok
-}
-
-// CleanupHandles cleans up every cached handle that has something to release.
-func CleanupHandles(ctx context.Context) error {
-	handles, ok := GetHandles(ctx)
-	if !ok {
-		return nil
-	}
-	return handles.Cleanup()
 }

@@ -1,6 +1,7 @@
 package futura_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/futura-platform/futura"
@@ -31,13 +32,16 @@ func TestNewPlainDurableHandle(t *testing.T) {
 
 		flowFn := func(b futura.FlowBuilder, _ struct{}) (plainState, error) {
 			b = handle.Provide(b)
-			ref, persist := handle.Use(b)
+			ref := handle.Use(b)
 			if ref.Visible == "from-constructor" {
-				ref.Visible = "persisted"
-				ref.hidden = "persisted-hidden"
-				ref.Count = 2
-				didChange := persist()
-				assert.True(t, didChange)
+				if err := futura.Action(b, func(ctx context.Context) error {
+					ref.Visible = "persisted"
+					ref.hidden = "persisted-hidden"
+					ref.Count = 2
+					return nil
+				}); err != nil {
+					return plainState{}, err
+				}
 			}
 			return *ref, nil
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
+	"github.com/futura-platform/futura/internal/flowhooks"
 )
 
 type FlowFn[A, R any] func(b FlowBuilder, args A) (R, error)
@@ -33,6 +34,11 @@ func _newFlow[A, R any](
 		exec: exec,
 	}
 }
+
+// cleanupHandlesAtEnd releases the run's handles once the execution ends, whatever else was registered.
+var cleanupHandlesAtEnd = flowhooks.WithOnExecutionEnd(func(ctx context.Context, _ error) error {
+	return execution.MustFromContext(ctx).Handles().Cleanup()
+})
 
 // SerializedFlow is a semantic type alias that clarifies that these bytes represent a flow.
 type SerializedFlow []byte
@@ -74,12 +80,12 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 	}
 
 	result, err = flow.Loop(
-		execution.WithFlow(ctx, f.exec),
+		durable.WithHandles(execution.WithFlow(ctx, f.exec), f.exec.Handles()),
 		func(flowCtx context.Context, args A) (R, error) {
 			return fn(newFlowBuilder(flowCtx, f.exec), args)
 		},
 		args,
-		append([]ftype.FlowLoopOption{durable.WithHandlesCache()}, opts...)...,
+		append([]ftype.FlowLoopOption{cleanupHandlesAtEnd}, opts...)...,
 	)
 
 	return result, err

@@ -1,6 +1,7 @@
 package futura
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,10 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
-	"github.com/futura-platform/futura/internal/goroutinebind"
 )
 
 type DurableHandle[T any] struct {
@@ -52,20 +51,22 @@ func NewDurableHandle[T any](
 	}
 }
 
+// durableResolver is a handle's value within one execution: resolved once, mutated in place by steps,
+// and flushed at every durable boundary.
 type durableResolver[T any] struct {
 	handleId int32
+	marshal  func(*T) ([]byte, error)
 	cleanup  func(*T) error
 	// run is the execution this resolver was made for. Its value is only meaningful there.
 	run uint64
 
-	// durableMu protects the resolver state below. It is shared across resolve and
-	// persist calls, so that remote checksum state stays canonical across multiple
-	// Use() calls (and multiple persist funcs).
-	durableMu sync.Mutex
-
 	valueLoader  sync.Once
 	valueLoadErr any
-	cached       fastComparableValue[T]
+	// mu guards value and flushed: resolve and Flush can run on different goroutines.
+	mu    sync.Mutex
+	value *T
+	// flushed is the value as last loaded or staged, so that an unchanged value is not stored again.
+	flushed []byte
 }
 
 // Cleanup implements durable.Cleaner. It is only called if the value was resolved.
@@ -73,33 +74,36 @@ func (r *durableResolver[T]) Cleanup() error {
 	if r.cleanup == nil {
 		return nil
 	}
-
-	r.durableMu.Lock()
-	v := r.cached.value
-	r.durableMu.Unlock()
+	r.mu.Lock()
+	v := r.value
+	r.mu.Unlock()
 	if v == nil {
 		return nil
 	}
 	return r.cleanup(v)
 }
 
-type syncLevel int
-
-const (
-	syncLevelNone syncLevel = iota
-	syncLevelLocal
-	syncLevelRemote
-)
-
-type fastComparableValue[T any] struct {
-	value    *T
-	checksum uint64
-	sync     syncLevel
+// Flush implements durable.Flusher.
+func (r *durableResolver[T]) Flush() (value []byte, changed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.value == nil {
+		return nil, false
+	}
+	serialized, err := r.marshal(r.value)
+	if err != nil {
+		panic(err)
+	}
+	if bytes.Equal(serialized, r.flushed) {
+		return nil, false
+	}
+	r.flushed = serialized
+	return serialized, true
 }
 
 func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *T {
-	r.durableMu.Lock()
-	defer r.durableMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	r.valueLoader.Do(func() {
 		defer func() {
@@ -111,29 +115,22 @@ func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *
 
 		exec := execution.MustFromContext(ctx)
 		serialized, ok := exec.LoadDurable(ctx, string(d.key))
-
-		var v fastComparableValue[T]
 		if !ok {
-			v.value = d.constructor()
-			v.checksum = 0
-			v.sync = syncLevelLocal
+			r.value = d.constructor()
 		} else {
 			value, err := d.unmarshal(serialized)
 			if err != nil {
 				panic(err)
 			}
-			v.value = value
-			v.checksum = xxhash.Sum64(serialized)
-			v.sync = syncLevelRemote
+			r.value = value
+			r.flushed = serialized
 		}
-
-		r.cached = v
 	})
 	if r.valueLoadErr != nil {
 		panic(r.valueLoadErr)
 	}
 
-	return r.cached.value
+	return r.value
 }
 
 func (d *DurableHandle[T]) Key() string {
@@ -180,14 +177,15 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 	// either load the existing resolver, or create a new one.
 	// the cache cleans its resolvers up when the execution ends.
 	run := execution.MustFromContext(ctx).Run()
-	anyResolver := handles.LoadOrCompute(d.key, func() any {
+	resolver := handles.LoadOrCompute(d.key, func() durable.Handle {
 		return &durableResolver[T]{
 			handleId: d.id,
+			marshal:  d.marshal,
 			cleanup:  d.cleanup,
 			run:      run,
 		}
 	})
-	return context.WithValue(ctx, d.key, anyResolver.(*durableResolver[T]))
+	return context.WithValue(ctx, d.key, resolver.(*durableResolver[T]))
 }
 
 var (
@@ -196,51 +194,16 @@ var (
 	ErrDurableResolverStale    = errors.New("durable resolver belongs to an execution that has ended")
 )
 
-// Use returns a reference to the durable value, and a function to persist the changes to the durable value.
-// Persist should ALWAYS be called at some point after the ref is mutated, before the run ends.
-// Persist will return true if the value was changed, and false if it was not.
-// If persist returns false, that also implies that the StoreDurable call was skipped.
-// Not doing so can cause the changes to be lost in the event of a failure.
-// This function will attempt to load the value from the execution container,
-// and if it fails, it will call the constructor to create a new value. (via the durableResolver).
-func (d *DurableHandle[T]) Use(ctx context.Context) (ref *T, persist func() (didChange bool)) {
-	// first check if the builder context has a value for this key
+// Use returns the durable value, to be mutated in place inside steps.
+// Every change is committed with the memo of the step that made it, so nothing has to be called for
+// a change to be durable. The value is loaded from the execution container the first time it is used
+// in an execution, and constructed if the container has none.
+func (d *DurableHandle[T]) Use(ctx context.Context) *T {
 	r, ok := ctx.Value(d.key).(*durableResolver[T])
 	if !ok {
 		panic(fmt.Errorf("%w: %s", ErrDurableResolverNotFound, d.key))
 	} else if r.handleId != d.id {
 		panic(fmt.Errorf("%w: %s, expected %d, got %d", ErrDurableResolverMismatch, d.key, d.id, r.handleId))
 	}
-
-	ref = r.resolve(ctx, d)
-	return ref, func() bool {
-		// persist is callable anywhere, so we need to temporarily bind to the current goroutine to allow the store to happen.
-		boundCtx := goroutinebind.BindGoroutine(ctx)
-		exec := execution.MustFromContext(boundCtx)
-		if exec.Run() != r.run {
-			panic(fmt.Errorf("%w: %s", ErrDurableResolverStale, d.key))
-		}
-
-		r.durableMu.Lock()
-		defer r.durableMu.Unlock()
-
-		if r.cached.value == nil {
-			return false
-		}
-		serialized, err := d.marshal(r.cached.value)
-		if err != nil {
-			panic(err)
-		}
-
-		// don't call store if the value hasn't changed
-		localChecksum := xxhash.Sum64(serialized)
-		didChange := r.cached.sync != syncLevelRemote || localChecksum != r.cached.checksum
-		if didChange {
-			exec.StoreDurable(boundCtx, string(d.key), serialized)
-			// update remote state so repeated persist calls are idempotent.
-			r.cached.checksum = localChecksum
-			r.cached.sync = syncLevelRemote
-		}
-		return didChange
-	}
+	return r.resolve(ctx, d)
 }

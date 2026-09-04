@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"testing"
 
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/durable"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
@@ -41,6 +43,9 @@ type FlowExecution struct {
 	run uint64
 	// dirty holds the durable values written behind, until the next replay flushes them. Protected by mu.
 	dirty map[string][]byte
+	// handles is the run's cache of resolved handles. Their changes are flushed at every durable
+	// boundary exactly like values written behind. Replaced by TryStartRun; protected by mu.
+	handles *durable.Handles
 	// cancelCurrentReplay cancels the most recently started replay. Protected by mu.
 	cancelCurrentReplay context.CancelCauseFunc
 }
@@ -66,14 +71,13 @@ func (f *FlowExecution) mustReadTransact(ctx context.Context, fn func(ctx contex
 }
 
 func NewFlowExecution() *FlowExecution {
-	return &FlowExecution{
-		c: executiontype.NewInMemoryContainer(),
-	}
+	return NewFlowExecutionWithContainer(executiontype.NewInMemoryContainer())
 }
 
 func NewFlowExecutionWithContainer(c executiontype.TransactionalContainer) *FlowExecution {
 	return &FlowExecution{
-		c: c,
+		c:       c,
+		handles: durable.NewHandles(),
 	}
 }
 
@@ -143,6 +147,7 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	replayCtx, cancel := replay.With(ctx)
 	f.cancelCurrentReplay = cancel
 
+	f.stageChangedHandles()
 	// The transaction may be retried by the container, so it only reads and writes durable state.
 	// In-memory state (the dirty map) is consumed after it commits.
 	var flags replay.Flags
@@ -157,6 +162,26 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	f.dirty = nil
 
 	return sequence.With(replayCtx, flags), dirtyEpoch
+}
+
+// Handles returns the run's cache of resolved handles.
+func (f *FlowExecution) Handles() *durable.Handles {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.handles
+}
+
+// stageChangedHandles adds the handle values that changed since the last boundary to the dirty map,
+// so that the boundary's transaction flushes them. It must be called with mu held.
+func (f *FlowExecution) stageChangedHandles() {
+	changed := f.handles.Flush()
+	if len(changed) == 0 {
+		return
+	}
+	if f.dirty == nil {
+		f.dirty = map[string][]byte{}
+	}
+	maps.Copy(f.dirty, changed)
 }
 
 // flushDirty writes every value written behind into tx, together with the dirty epoch bump that makes
@@ -289,6 +314,7 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 	// without ever having been flushed
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.stageChangedHandles()
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		i := sequence.GetIndex(ctx)
 		size := tx.CallOrderLength()
@@ -324,17 +350,6 @@ func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]b
 	return state, ok
 }
 
-func (f *FlowExecution) StoreDurable(ctx context.Context, durableKey string, state []byte) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		err := tx.StoreDurable(GenericDurableKey(durableKey), state)
-		if err != nil {
-			panic(err)
-		}
-	})
-}
-
 // Run identifies the execution in flight, or the last one if none is. It starts at 1.
 func (f *FlowExecution) Run() uint64 {
 	f.mu.RLock()
@@ -361,6 +376,8 @@ func (f *FlowExecution) TryStartRun() (stop func(), ok bool) {
 	}
 	f.running = true
 	f.run++
+	// a run resolves its own handles: the previous run's were cleaned up when it ended
+	f.handles = durable.NewHandles()
 	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
