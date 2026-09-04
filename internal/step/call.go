@@ -21,9 +21,15 @@ var (
 
 func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity moment.Identity, args A, callstack []runtime.Frame) (output R, err error) {
 	callCount := 0
-	callPanicked := true
+	// what the call panicked with, if it did not return: a wrapper may have recovered it
+	var callPanic any
 	callFn := func() (any, error) {
 		callCount++
+		defer func() {
+			if callPanic = recover(); callPanic != nil {
+				panic(callPanic)
+			}
+		}()
 		activeGoroutines, ctx := withActiveGoroutines(ctx)
 		// make sure to assign to these variables (output, err) in the correct scope (NOT THE LOCAL SCOPE OF THIS FUNCTION)
 		output, err = fn.Call(ctx, identity, args)
@@ -35,7 +41,6 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 			// if the cancellation was the replay's, terminate: the cancellation is not a failure.
 			terminateIfReplayCancelled(ctx)
 		}
-		callPanicked = false
 		return output, err
 	}
 	stepWrapper, ok := stepwrapper.FromContext(ctx)
@@ -47,9 +52,13 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrDidNotCall))
 		} else if callCount > 1 {
 			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrCalledMultipleTimes))
-		} else if callPanicked {
-			terminateIfReplayCancelled(ctx)
-			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrRecoveredCall))
+		} else if callPanic != nil {
+			// the wrapper recovered the call's panic. A termination is the runtime's own and is re-raised;
+			// anything else was the step's, and a wrapper may not turn it into a return.
+			if _, terminated := AsReplayTerminated(callPanic); terminated {
+				panic(callPanic)
+			}
+			panic(fmt.Errorf("%w: %w: %v", ErrIllegalStepWrapperBehavior, ErrRecoveredCall, callPanic))
 		} else if errOverride != nil {
 			err = errOverride
 		}
@@ -80,6 +89,16 @@ func (e ReplayTerminatedError) Error() string {
 func (e ReplayTerminatedError) Is(target error) bool { return target == ErrReplayTerminated }
 
 func (e ReplayTerminatedError) Unwrap() error { return replay.Cause(e.Replay) }
+
+// AsReplayTerminated returns the replay termination in a recovered panic value, possibly wrapped by a
+// step wrapper that re-panicked it inside its own error.
+func AsReplayTerminated(recovered any) (terminated ReplayTerminatedError, ok bool) {
+	err, isErr := recovered.(error)
+	if !isErr {
+		return terminated, false
+	}
+	return terminated, errors.As(err, &terminated)
+}
 
 func terminateIfReplayCancelled(ctx context.Context) {
 	if replay.Err(ctx) != nil {

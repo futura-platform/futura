@@ -107,7 +107,7 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 func executeReplay[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A) (result T, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			if terminated, ok := r.(step.ReplayTerminatedError); ok {
+			if terminated, ok := step.AsReplayTerminated(r); ok {
 				if !replay.Same(terminated.Replay, ctx) {
 					err = fmt.Errorf("%w: %w", ErrStaleReplay, terminated)
 					return

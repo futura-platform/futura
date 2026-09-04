@@ -11,8 +11,8 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/fopt"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/require"
 )
@@ -122,6 +122,58 @@ func TestWithMaxFailures(t *testing.T) {
 				return s.V(), nil
 			}, nil)
 		}, nil, fopt.WithMaxFailures(2), fopt.WithStepWrapper(annotating))
+		require.NoError(t, err)
+		require.Equal(t, 3, r)
+	})
+	t.Run("a wrapper that recovers a step's own panic after a state change reports the panic, not a restart", func(t *testing.T) {
+		annotating := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
+			defer func() {
+				if r := recover(); r != nil {
+					errOverride = fmt.Errorf("step %s panicked: %v", fnLabel, r)
+				}
+			}()
+			_, err := call()
+			return err
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		replays := 0
+		_, err := futura.NewFlowFromContainer[any, int](containertest.NewInMemory()).Execute(ctx, func(b futura.FlowBuilder, _ any) (int, error) {
+			replays++
+			s := futura.State(b, 0)
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (int, error) {
+				s.Set(s.V() + 1) // the replay is now cancelled for a restart
+				panic("a real bug in the step")
+			}, nil)
+		}, nil, fopt.WithStepWrapper(annotating))
+		require.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		require.ErrorContains(t, err, "a real bug in the step")
+		require.NotErrorIs(t, err, context.DeadlineExceeded, "the flow restarted forever instead of reporting the panic")
+		require.Less(t, replays, 10)
+	})
+	t.Run("a wrapper that re-panics a termination wrapped in its own error still restarts the replay", func(t *testing.T) {
+		rewrapping := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
+			defer func() {
+				if r := recover(); r != nil {
+					if e, ok := r.(error); ok {
+						panic(fmt.Errorf("step %s: %w", fnLabel, e))
+					}
+					panic(r)
+				}
+			}()
+			_, err := call()
+			return err
+		}
+		r, err := futura.NewFlowFromContainer[any, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ any) (int, error) {
+			s := futura.State(b, 0)
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (int, error) {
+				if v := s.V(); v < 3 {
+					s.Set(v + 1)
+					return 0, ctx.Err()
+				}
+				return s.V(), nil
+			}, nil)
+		}, nil, fopt.WithStepWrapper(rewrapping))
 		require.NoError(t, err)
 		require.Equal(t, 3, r)
 	})
