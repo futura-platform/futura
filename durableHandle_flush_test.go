@@ -11,10 +11,28 @@ import (
 	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/errors"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
+
+var errCommitFailed = errors.New("commit failed")
+
+// failingContainer rejects the failAt'th write transaction, the way a backend does on a transient error.
+type failingContainer struct {
+	*executiontype.InMemoryContainer
+	failAt int
+	txs    int
+}
+
+func (c *failingContainer) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
+	c.txs++
+	if c.txs == c.failAt {
+		return errCommitFailed
+	}
+	return c.InMemoryContainer.Transact(ctx, fn)
+}
 
 // keyStoreCountingContainer counts the stores made to one durable key.
 type keyStoreCountingContainer struct {
@@ -80,9 +98,35 @@ func TestDurableHandle_ChangesAreCommittedWithTheStepsMemo(t *testing.T) {
 			})
 		}
 	})
+	t.Run("a change whose memo fails to commit is not committed by the next execution", func(t *testing.T) {
+		h := futura.NewPlainDurableHandle("flush-failed-commit", func() *[]int { v := []int{}; return &v })
+		runs := 0
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			b = h.Provide(b)
+			ref := h.Use(b)
+			if err := futura.Action(b, func(ctx context.Context) error {
+				runs++
+				*ref = append(*ref, len(*ref)+1)
+				return nil
+			}); err != nil {
+				return 0, err
+			}
+			return len(*ref), nil
+		}
+		c := &failingContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failAt: 2} // the step's memo commit
+		f := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c))
+		_, err := f.Execute(t.Context(), flowFn, struct{}{})
+		assert.ErrorIs(t, err, errCommitFailed)
+		_, ok, _ := c.LoadDurable(execution.GenericDurableKey("flush-failed-commit"))
+		assert.False(t, ok, "nothing was committed")
+
+		// the same Flow retries, as a caller does after a transient container error
+		r, err := f.Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, r, "the step's effect was applied twice")
+		assert.Equal(t, 2, runs, "the step re-ran once (at-least-once), from the container's state")
+	})
 	t.Run("a change made by a step that then fails is committed with the failure", func(t *testing.T) {
-		// the shape of a failure counter kept in a wrapper: the step fails, the counter moves, and the
-		// count must be durable before the next replay retries
 		h := futura.NewPlainDurableHandle("flush-on-failure", func() *int { v := 0; return &v })
 		attempts := 0
 		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {

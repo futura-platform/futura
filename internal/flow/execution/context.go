@@ -6,13 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"sync"
 	"testing"
 
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
-	"github.com/futura-platform/futura/internal/errors"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/goroutinebind"
@@ -44,7 +43,7 @@ type FlowExecution struct {
 	// dirty holds the durable values written behind, until the next replay flushes them. Protected by mu.
 	dirty map[string][]byte
 	// handles is the run's cache of resolved handles. Their changes are flushed at every durable
-	// boundary exactly like values written behind. Replaced by TryStartRun; protected by mu.
+	// boundary, in that boundary's transaction. Replaced by TryStartRun; protected by mu.
 	handles *durable.Handles
 	// cancelCurrentReplay cancels the most recently started replay. Protected by mu.
 	cancelCurrentReplay context.CancelCauseFunc
@@ -147,13 +146,13 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	replayCtx, cancel := replay.With(ctx)
 	f.cancelCurrentReplay = cancel
 
-	f.stageChangedHandles()
+	changedHandles := f.handles.Flush()
 	// The transaction may be retried by the container, so it only reads and writes durable state.
 	// In-memory state (the dirty map) is consumed after it commits.
 	var flags replay.Flags
 	var dirtyEpoch uint64
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		dirtyEpoch = f.flushDirty(tx)
+		dirtyEpoch = f.flushDirty(tx, changedHandles)
 		flags = replay.Flags{
 			// an unevaluated invalidation is uncharted territory, so allow the moment order to change
 			PanicOnMomentOrderChange: dirtyEpoch <= f.getEpoch(tx, evaluatedEpochKey),
@@ -171,30 +170,21 @@ func (f *FlowExecution) Handles() *durable.Handles {
 	return f.handles
 }
 
-// stageChangedHandles adds the handle values that changed since the last boundary to the dirty map,
-// so that the boundary's transaction flushes them. It must be called with mu held.
-func (f *FlowExecution) stageChangedHandles() {
-	changed := f.handles.Flush()
-	if len(changed) == 0 {
-		return
-	}
-	if f.dirty == nil {
-		f.dirty = map[string][]byte{}
-	}
-	maps.Copy(f.dirty, changed)
-}
-
-// flushDirty writes every value written behind into tx, together with the dirty epoch bump that makes
-// the next replay relaxed, and returns the resulting dirty epoch. It must be called with mu held, and it
-// only touches tx: the caller clears the dirty map once the transaction has committed.
-func (f *FlowExecution) flushDirty(tx executiontype.Container) uint64 {
+// flushDirty writes every value written behind, and the handle values that changed since the last
+// boundary, into tx, and it bumps the dirty epoch (if something was written).
+func (f *FlowExecution) flushDirty(tx executiontype.Container, changedHandles map[string][]byte) uint64 {
 	dirtyEpoch := f.getEpoch(tx, dirtyEpochKey)
-	if len(f.dirty) == 0 {
+	if len(f.dirty) == 0 && len(changedHandles) == 0 {
 		return dirtyEpoch
 	}
 	dirtyEpoch++
 	f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
 	for key, value := range f.dirty {
+		if err := tx.StoreDurable(GenericDurableKey(key), value); err != nil {
+			panic(err)
+		}
+	}
+	for key, value := range changedHandles {
 		if err := tx.StoreDurable(GenericDurableKey(key), value); err != nil {
 			panic(err)
 		}
@@ -307,7 +297,7 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 	// without ever having been flushed
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.stageChangedHandles()
+	changedHandles := f.handles.Flush()
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
 		i := sequence.GetIndex(ctx)
 		size := tx.CallOrderLength()
@@ -322,7 +312,7 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 			tx.SetCallOrderAt(i, identity)
 		}
 		tx.SetMoment(identity, currentMoment)
-		f.flushDirty(tx)
+		f.flushDirty(tx, changedHandles)
 	})
 	f.dirty = nil
 	sequence.MarkSeen(ctx, identity)
