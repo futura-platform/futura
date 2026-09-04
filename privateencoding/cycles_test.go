@@ -14,6 +14,11 @@ type cyclicNode struct {
 	Next *cyclicNode
 }
 
+type cyclicList struct {
+	V    int
+	Kids []cyclicList
+}
+
 type withEmbeddedMutex struct {
 	sync.Mutex
 	N int
@@ -31,6 +36,18 @@ func TestEncoder_CyclicValue(t *testing.T) {
 		var buf bytes.Buffer
 		err := privateencoding.NewEncoder[*cyclicNode](&buf).Encode(n)
 		assert.ErrorIs(t, err, privateencoding.ErrCyclicValue)
+	})
+	t.Run("a slice over a prefix of an enclosing slice is not a cycle", func(t *testing.T) {
+		nodes := make([]cyclicList, 2)
+		nodes[1].Kids = nodes[:1] // reaches nodes[0], whose Kids is nil
+		var buf bytes.Buffer
+		assert.NoError(t, privateencoding.NewEncoder[[]cyclicList](&buf).Encode(nodes))
+	})
+	t.Run("a slice that contains itself is a cycle", func(t *testing.T) {
+		nodes := make([]cyclicList, 1)
+		nodes[0].Kids = nodes
+		var buf bytes.Buffer
+		assert.ErrorIs(t, privateencoding.NewEncoder[[]cyclicList](&buf).Encode(nodes), privateencoding.ErrCyclicValue)
 	})
 	t.Run("a shared pointee that is not a cycle encodes", func(t *testing.T) {
 		shared := &cyclicNode{V: 1}

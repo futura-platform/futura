@@ -31,10 +31,12 @@ type Encoder[T any] struct {
 
 // visit identifies a pointer, slice, or map on the path being encoded. The type is part of it: a
 // struct and its first field share an address, so a pointer into the first field is a different
-// value at the same address, not a cycle.
+// value at the same address, not a cycle. So is the length: a slice over a prefix of an enclosing
+// slice shares its address and type, and reaches strictly fewer elements.
 type visit struct {
 	address uintptr
 	typ     reflect.Type
+	length  int // only used for slices
 }
 
 func NewEncoder[T any](w io.Writer) *Encoder[T] {
@@ -50,7 +52,10 @@ var ErrCyclicValue = errors.New("cyclic value")
 // enter marks the pointer v as being encoded, and returns the func that unmarks it.
 // It reports an error if v is already on the path being encoded.
 func (e *Encoder[T]) enter(v reflect.Value, path string) (leave func(), err error) {
-	key := visit{v.Pointer(), v.Type()}
+	key := visit{address: v.Pointer(), typ: v.Type()}
+	if v.Kind() == reflect.Slice {
+		key.length = v.Len()
+	}
 	if !e.visiting.Add(key) {
 		return nil, encodePathError(path, ErrCyclicValue)
 	}
