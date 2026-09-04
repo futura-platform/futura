@@ -500,6 +500,22 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		}, struct{}{})
 		assert.NoError(t, err)
 	})
+	t.Run("a builder from a previous execution cannot provide a handle", func(t *testing.T) {
+		h := NewPlainDurableHandle("staleProvide", func() *int { v := 0; return &v })
+		f := NewFlowFromContainer[struct{}, int](containertest.NewInMemory())
+		var stale FlowBuilder
+		_, err := f.Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			stale = b
+			return 0, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+
+		_, err = f.Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			testutil.PanicsWithErrorIs(t, ErrDurableResolverStale, func() { h.Provide(stale) })
+			return 0, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+	})
 	t.Run("handles can be provided from a goroutine bound to the execution", func(t *testing.T) {
 		a := NewPlainDurableHandle("providedFromGoroutine", func() *int { v := 0; return &v })
 		c := NewPlainDurableHandle("providedFromFlow", func() *int { v := 0; return &v })

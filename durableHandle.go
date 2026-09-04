@@ -174,10 +174,15 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 	if !ok {
 		panic(fmt.Errorf("%w: %s", ErrDurableHandlesNotFound, d.key))
 	}
+	exec := execution.MustFromContext(ctx)
+	if handles != exec.Handles() {
+		// the context's cache belongs to an execution that ended: nothing flushes or cleans it up any more
+		panic(fmt.Errorf("%w: %s", ErrDurableResolverStale, d.key))
+	}
 
 	// either load the existing resolver, or create a new one.
 	// the cache cleans its resolvers up when the execution ends.
-	run := execution.MustFromContext(ctx).Run()
+	run := exec.Run()
 	resolver := handles.LoadOrCompute(d.key, func() durable.Handle {
 		return &durableResolver[T]{
 			handleId: d.id,
