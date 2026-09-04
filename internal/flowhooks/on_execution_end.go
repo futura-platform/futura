@@ -3,9 +3,10 @@ package flowhooks
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/futura-platform/futura/ftype"
-	"github.com/futura-platform/futura/internal/errors"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 )
 
 // WithOnExecutionEnd registers a callback that will be invoked once when a top-level
@@ -22,7 +23,8 @@ func WithOnExecutionEnd(onEnd func(ctx context.Context, err error) error) ftype.
 			panic("WithOnExecutionEnd callback cannot be nil")
 		}
 		existing, _ := ctx.Value(executionEndHooksKey).([]executionEndHook)
-		hooks := append(existing, executionEndHook(onEnd))
+
+		hooks := append(slices.Clip(existing), executionEndHook(onEnd))
 		return context.WithValue(ctx, executionEndHooksKey, hooks)
 	}
 }

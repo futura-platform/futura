@@ -151,3 +151,23 @@ func TestWithOnExecutionEnd(t *testing.T) {
 		assert.Equal(t, []string{"onEnd2", "onEnd1"}, callOrder)
 	})
 }
+
+func TestWithOnExecutionEnd_DerivedContextsDoNotShareHooks(t *testing.T) {
+	var ran []string
+	hook := func(name string) ftype.FlowLoopOption {
+		return flowhooks.WithOnExecutionEnd(func(context.Context, error) error { ran = append(ran, name); return nil })
+	}
+	// enough hooks on the base for its slice to have spare capacity
+	base := t.Context()
+	for i := range 5 {
+		base = hook(fmt.Sprintf("base%d", i))(base)
+	}
+	a := hook("a")(base)
+	b := hook("b")(base)
+
+	assert.NoError(t, flowhooks.RunOnExecutionEnd(a, nil))
+	assert.Equal(t, "a", ran[0], "a's own hook runs first")
+	ran = nil
+	assert.NoError(t, flowhooks.RunOnExecutionEnd(b, nil))
+	assert.Equal(t, "b", ran[0])
+}
