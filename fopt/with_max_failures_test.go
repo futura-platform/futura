@@ -3,12 +3,15 @@ package fopt_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/fopt"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/require"
@@ -95,6 +98,50 @@ func TestWithMaxFailures(t *testing.T) {
 		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
 		require.NotErrorIs(t, err, context.DeadlineExceeded)
 		require.Equal(t, 3, replays)
+	})
+	t.Run("a wrapper that recovers panics cannot turn a replay's termination into a failure", func(t *testing.T) {
+		// a replay is terminated by a panic raised inside the wrapper's frame. A wrapper that recovers
+		// panics (annotating middleware) hands back an error instead; the runtime must still see the
+		// termination for what it is, not count it as a failure.
+		annotating := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
+			defer func() {
+				if r := recover(); r != nil {
+					errOverride = fmt.Errorf("step %s panicked: %v", fnLabel, r)
+				}
+			}()
+			_, err := call()
+			return err
+		}
+		r, err := futura.NewFlowFromContainer[any, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ any) (int, error) {
+			s := futura.State(b, 0)
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (int, error) {
+				if v := s.V(); v < 3 {
+					s.Set(v + 1) // restarts the replay; the step is terminated
+					return 0, ctx.Err()
+				}
+				return s.V(), nil
+			}, nil)
+		}, nil, fopt.WithMaxFailures(2), fopt.WithStepWrapper(annotating))
+		require.NoError(t, err)
+		require.Equal(t, 3, r)
+	})
+	t.Run("a wrapper that swallows a panic cannot memoize a step that never returned", func(t *testing.T) {
+		swallowing := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
+			defer func() { recover() }()
+			call()
+			return nil
+		}
+		c := containertest.NewInMemory()
+		calls := 0
+		flowFn := func(b futura.FlowBuilder, _ any) (int, error) {
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (int, error) { calls++; panic("boom") }, nil)
+		}
+		_, err := futura.NewFlowFromContainer[any, int](c).Execute(t.Context(), flowFn, nil, fopt.WithStepWrapper(swallowing))
+		require.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		// the step was never recorded as done, so a fresh execution runs it again
+		_, err = futura.NewFlowFromContainer[any, int](c).Execute(t.Context(), flowFn, nil, fopt.WithStepWrapper(swallowing))
+		require.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		require.Equal(t, 2, calls)
 	})
 	t.Run("a cancellation that lands during a step is not counted as a failure", func(t *testing.T) {
 		container := executiontype.NewInMemoryContainer()

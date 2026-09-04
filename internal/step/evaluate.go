@@ -9,7 +9,7 @@ import (
 	"runtime"
 
 	"github.com/futura-platform/futura/flog"
-	"github.com/futura-platform/futura/internal/errors"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
@@ -78,6 +78,10 @@ func evaluateWithCallstack[A comparable, R any](
 	)
 
 	f := execution.MustFromContext(ctx)
+	// an identity reached twice in one replay can never be memoized, so it is rejected before its fn runs
+	if sequence.IsSeen(ctx, identity) {
+		panic(ftrerrors.InconsistentStateError(execution.UnexpectedDuplicateMomentError{Identity: identity}))
+	}
 	l := flog.FromContext(ctx)
 
 	thisSequenceIndex := sequence.GetIndex(ctx)
@@ -159,6 +163,9 @@ func evaluateWithCallstack[A comparable, R any](
 	anyOutput, ok := currentMoment.Output().Get()
 	if !ok {
 		panic(ftrerrors.InconsistentStateError(fmt.Errorf("expected moment to have a valid output, but it was not")))
+	}
+	if anyOutput == nil {
+		return output, nil
 	}
 	return anyOutput.(R), nil
 }

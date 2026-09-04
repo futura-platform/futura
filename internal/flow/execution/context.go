@@ -303,13 +303,6 @@ func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity)
 // Anything written behind while the moment was produced is committed with it: the memo is the record
 // that the moment's effects happened, so it must never be durable without them.
 func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment moment.Moment) {
-	if sequence.IsSeen(ctx, identity) {
-		// if we see an identity twice in the same replay, the consumer is doing something wrong
-		panic(ftrerrors.InconsistentStateError(UnexpectedDuplicateMomentError{
-			identity: identity,
-		}))
-	}
-
 	// the lock spans the commit and the clear: a value written behind in between would be cleared
 	// without ever having been flushed
 	f.mu.Lock()
@@ -443,12 +436,13 @@ func (e SequenceIndexOutOfBoundsError) Error() string {
 	return fmt.Sprintf("sequenceIndex is greater than the length of the memoized moment sequence: %d > %d", e.sequenceIndex, e.sequenceLength)
 }
 
+// UnexpectedDuplicateMomentError reports a moment reached twice in one replay, which cannot be memoized.
 type UnexpectedDuplicateMomentError struct {
-	identity moment.Identity
+	Identity moment.Identity
 }
 
 func (e UnexpectedDuplicateMomentError) Error() string {
-	return fmt.Sprintf("identity '%s' was seen twice in the same replay", e.identity.String())
+	return fmt.Sprintf("identity '%s' was seen twice in the same replay", e.Identity.String())
 }
 
 // FlowContextUsedInWrongGoroutineError is an error used to enforce a flow executing all within the same goroutine.

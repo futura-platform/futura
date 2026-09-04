@@ -332,11 +332,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 			m, _ := c.GetMoment(recordKey)
 			assert.Equal(t, m, *recordMoment)
 
-			assert.PanicsWithError(t, ftrerrors.InconsistentStateError(UnexpectedDuplicateMomentError{
-				identity: recordKey,
-			}).Error(), func() {
-				f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
-			})
+			assert.True(t, sequence.IsSeen(ctx, recordKey))
 		})
 
 		t.Run("set call order at existing index", func(t *testing.T) {
@@ -350,11 +346,7 @@ func TestRecordCurrentMoment(t *testing.T) {
 			m, _ := c.GetMoment(recordKey)
 			assert.Equal(t, m, *recordMoment)
 
-			assert.PanicsWithError(t, ftrerrors.InconsistentStateError(UnexpectedDuplicateMomentError{
-				identity: recordKey,
-			}).Error(), func() {
-				f.RecordCurrentMoment(ctx, recordKey, *recordMoment)
-			})
+			assert.True(t, sequence.IsSeen(ctx, recordKey))
 		})
 	})
 	t.Run("sequence index out of bounds", func(t *testing.T) {

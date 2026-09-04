@@ -476,6 +476,30 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 			t.Fatal("the execution never ended: the cleanup blocked on the handles cache")
 		}
 	})
+	t.Run("a builder from a previous execution cannot use a handle", func(t *testing.T) {
+		// the value a stale builder would hand back belongs to an execution that ended: it was cleaned
+		// up, and its changes no longer flush
+		h := NewPlainDurableHandle("staleUse", func() *int { v := 0; return &v })
+		c := containertest.NewInMemory()
+		f := NewFlowFromContainer[struct{}, int](c)
+		var stale FlowBuilder
+		_, err := f.Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			b = h.Provide(b)
+			stale = b
+			return 0, Action(b, func(ctx context.Context) error { *h.Use(b) = 1; return nil })
+		}, struct{}{})
+		assert.NoError(t, err)
+
+		_, err = f.Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			b = h.Provide(b)
+			if err := Action(b, func(ctx context.Context) error { *h.Use(b) = 2; return nil }); err != nil {
+				return 0, err
+			}
+			testutil.PanicsWithErrorIs(t, ErrDurableResolverStale, func() { h.Use(stale) })
+			return *h.Use(b), nil
+		}, struct{}{})
+		assert.NoError(t, err)
+	})
 	t.Run("handles can be provided from a goroutine bound to the execution", func(t *testing.T) {
 		a := NewPlainDurableHandle("providedFromGoroutine", func() *int { v := 0; return &v })
 		c := NewPlainDurableHandle("providedFromFlow", func() *int { v := 0; return &v })

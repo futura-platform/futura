@@ -15,11 +15,13 @@ var (
 	ErrIllegalStepWrapperBehavior = errors.New("illegal step wrapper behavior")
 	ErrDidNotCall                 = errors.New("did not call")
 	ErrCalledMultipleTimes        = errors.New("called multiple times")
+	ErrRecoveredCall              = errors.New("recovered a panic from the call")
 	ErrGoroutinesNotExited        = errors.New("goroutines not exited")
 )
 
 func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity moment.Identity, args A, callstack []runtime.Frame) (output R, err error) {
 	callCount := 0
+	callPanicked := true
 	callFn := func() (any, error) {
 		callCount++
 		activeGoroutines, ctx := withActiveGoroutines(ctx)
@@ -33,6 +35,7 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 			// if the cancellation was the replay's, terminate: the cancellation is not a failure.
 			terminateIfReplayCancelled(ctx)
 		}
+		callPanicked = false
 		return output, err
 	}
 	stepWrapper, ok := stepwrapper.FromContext(ctx)
@@ -44,6 +47,9 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrDidNotCall))
 		} else if callCount > 1 {
 			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrCalledMultipleTimes))
+		} else if callPanicked {
+			terminateIfReplayCancelled(ctx)
+			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrRecoveredCall))
 		} else if errOverride != nil {
 			err = errOverride
 		}

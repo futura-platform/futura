@@ -8,7 +8,7 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype/executiontype"
-	"github.com/futura-platform/futura/internal/errors"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
@@ -146,6 +146,51 @@ func TestStep(t *testing.T) {
 		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
+	})
+	t.Run("a step reached twice in one replay is rejected before it runs", func(t *testing.T) {
+		var sent []int
+		c := containertest.NewInMemory()
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			for _, x := range []int{1, 2} {
+				if err := futura.Effect(b, func(ctx context.Context, x int) error { sent = append(sent, x); return nil }, x); err != nil {
+					return 0, err
+				}
+			}
+			return 0, nil
+		}
+		for range 3 {
+			_, err := futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+			assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+			assert.ErrorIs(t, err, ftrerrors.ErrInconsistentState)
+		}
+		assert.Equal(t, []int{1}, sent, "the second reach ran its effect")
+	})
+	t.Run("a step whose interface-typed output is nil returns the zero value", func(t *testing.T) {
+		c := containertest.NewInMemory()
+		calls := 0
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			validation, err := futura.Source(b, func(ctx context.Context) (error, error) { calls++; return nil, nil })
+			if err != nil {
+				return 0, err
+			}
+			if validation != nil {
+				return 0, validation
+			}
+			anything, err := futura.Source(b, func(ctx context.Context) (any, error) { return nil, nil })
+			if err != nil {
+				return 0, err
+			}
+			if anything != nil {
+				return 0, errors.New("expected nil")
+			}
+			return 1, nil
+		}
+		for range 2 {
+			r, err := futura.NewFlowFromContainer[struct{}, int](c).Execute(t.Context(), flowFn, struct{}{})
+			assert.NoError(t, err)
+			assert.Equal(t, 1, r)
+		}
+		assert.Equal(t, 1, calls, "the nil output was not memoized")
 	})
 	t.Run("a step re-executed with a new input memoizes that input, not the original one", func(t *testing.T) {
 		replays := 0

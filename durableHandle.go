@@ -205,6 +205,9 @@ func (d *DurableHandle[T]) Use(ctx context.Context) *T {
 		panic(fmt.Errorf("%w: %s", ErrDurableResolverNotFound, d.key))
 	} else if r.handleId != d.id {
 		panic(fmt.Errorf("%w: %s, expected %d, got %d", ErrDurableResolverMismatch, d.key, d.id, r.handleId))
+	} else if execution.MustFromContext(ctx).Run() != r.run {
+		// the value belongs to an execution that ended: it was cleaned up, and its changes no longer flush
+		panic(fmt.Errorf("%w: %s", ErrDurableResolverStale, d.key))
 	}
 	return r.resolve(ctx, d)
 }
