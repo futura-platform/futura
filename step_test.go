@@ -192,6 +192,13 @@ func TestStep(t *testing.T) {
 		}
 		assert.Equal(t, 1, calls, "the nil output was not memoized")
 	})
+	t.Run("a step through a builder rebound to a context without a replay is rejected", func(t *testing.T) {
+		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			return futura.Step(b.WithContext(context.Background()), func(ctx context.Context, _ struct{}) (int, error) { return 1, nil }, struct{}{})
+		}, struct{}{})
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		assert.ErrorIs(t, err, step.ErrEvaledOutsideOfAFlowFunction)
+	})
 	t.Run("a step re-executed with a new input memoizes that input, not the original one", func(t *testing.T) {
 		replays := 0
 		var outputs []int

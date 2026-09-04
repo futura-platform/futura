@@ -61,6 +61,9 @@ func evaluateWithCallstack[A comparable, R any](
 	args A,
 	callstack []runtime.Frame,
 ) (output R, err error) {
+	if !replay.Has(ctx) {
+		panic(ftrerrors.InconsistentStateError(ErrEvaledOutsideOfAFlowFunction))
+	}
 	// if the replay is cancelled, terminate it immediately
 	terminateIfReplayCancelled(ctx)
 	// a step is a leaf of the flow: evaluated from inside another step, it would record at that step's index
