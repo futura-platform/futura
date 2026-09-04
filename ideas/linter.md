@@ -66,6 +66,17 @@ futura.Step(b, run, n)              // yes: n is an arg, part of the memo
 futura.Step(b.WithKey(id), fn, ...) // yes: id keys the moment
 ```
 
+A method value taken on an interface variable is the same case: `g.Greet` is declared once, on the
+interface, and the implementation behind it is captured state. Two implementations reached through
+the same interface variable at one callsite are one moment. Key on the implementation, or pass it as
+an arg. A method value on a concrete receiver is fine: each method is its own declaration.
+
+```go
+var g Greeter = pick()
+futura.Source(b, g.Greet)                    // no: English and French are one moment
+futura.Source(b.WithKey(g.Name()), g.Greet)  // yes
+```
+
 ## Step inputs and state values should be comparable by `==`
 
 The runtime compares a step's memoized input, and a state's current value, with `==` first. That is
