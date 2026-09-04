@@ -25,15 +25,23 @@ type Encoder[T any] struct {
 	// msgpackEncoder is used as a fast path for primitive leaf values
 	// (ints, floats, bools, strings, []byte) at any depth.
 	msgpackEncoder *msgpack.Encoder
-	// record the visited pointers, so we can detect cycles
-	visiting mapset.Set[uintptr]
+	// record the values being encoded, so we can detect cycles
+	visiting mapset.Set[visit]
+}
+
+// visit identifies a pointer, slice, or map on the path being encoded. The type is part of it: a
+// struct and its first field share an address, so a pointer into the first field is a different
+// value at the same address, not a cycle.
+type visit struct {
+	address uintptr
+	typ     reflect.Type
 }
 
 func NewEncoder[T any](w io.Writer) *Encoder[T] {
 	return &Encoder[T]{
 		w:              w,
 		msgpackEncoder: msgpack.NewEncoder(w),
-		visiting:       mapset.NewThreadUnsafeSet[uintptr](),
+		visiting:       mapset.NewThreadUnsafeSet[visit](),
 	}
 }
 
@@ -42,11 +50,11 @@ var ErrCyclicValue = errors.New("cyclic value")
 // enter marks the pointer v as being encoded, and returns the func that unmarks it.
 // It reports an error if v is already on the path being encoded.
 func (e *Encoder[T]) enter(v reflect.Value, path string) (leave func(), err error) {
-	address := v.Pointer()
-	if !e.visiting.Add(address) {
+	key := visit{v.Pointer(), v.Type()}
+	if !e.visiting.Add(key) {
 		return nil, encodePathError(path, ErrCyclicValue)
 	}
-	return func() { e.visiting.Remove(address) }, nil
+	return func() { e.visiting.Remove(key) }, nil
 }
 
 func (e *Encoder[T]) Encode(data T) error {
@@ -151,6 +159,10 @@ func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 		return nil
 	}
 
+	// an interface is encoded as its dynamic value, whatever the interface type promises
+	if uv.Kind() == reflect.Interface {
+		return e.encodeInterface(uv, path)
+	}
 	if getMarshaler, ok := implementsBinaryMarshaler(uv); ok {
 		if uv.Kind() == reflect.Pointer {
 			return e.encodeNillable(uv, path, func(v reflect.Value) error {
@@ -176,9 +188,6 @@ func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 			return encodePathError(path+".data", err)
 		}
 		return nil
-	}
-	if uv.Kind() == reflect.Interface {
-		return e.encodeInterface(uv, path)
 	}
 
 	// first try to encode through the fast binary encoder

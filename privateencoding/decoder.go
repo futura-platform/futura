@@ -1,6 +1,7 @@
 package privateencoding
 
 import (
+	"bufio"
 	"encoding"
 	"encoding/binary"
 	"fmt"
@@ -23,6 +24,11 @@ type Decoder[T any] struct {
 }
 
 func NewDecoder[T any](r io.Reader) *Decoder[T] {
+	// msgpack buffers ahead of a reader it cannot unread from, so the raw reads made here must share
+	// that buffer: one reader for both, and it is one msgpack will use as is
+	if _, ok := r.(io.ByteScanner); !ok {
+		r = bufio.NewReader(r)
+	}
 	return &Decoder[T]{
 		r:              r,
 		msgpackDecoder: msgpack.NewDecoder(r),
@@ -146,6 +152,9 @@ func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 		}
 		return nil
 	}
+	if uv.Kind() == reflect.Interface {
+		return d.decodeInterface(uv, path)
+	}
 	if getUnmarshaler, ok := implementsBinaryUnmarshaler(uv); ok {
 		decodeBinary := func() error {
 			var size int
@@ -165,9 +174,6 @@ func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 			return d.decodeNillable(uv, path, decodeBinary)
 		}
 		return decodeBinary()
-	}
-	if uv.Kind() == reflect.Interface {
-		return d.decodeInterface(uv, path)
 	}
 
 	// first try to decode through the fast primitive decoder

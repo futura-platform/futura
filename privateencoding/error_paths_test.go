@@ -233,6 +233,13 @@ func TestEncoder_ErrorPaths(t *testing.T) {
 	})
 }
 
+func roundTrip[T any](t *testing.T, value T) T {
+	t.Helper()
+	decoded, err := privateencoding.NewDecoder[T](bytes.NewReader(encodeValue(t, value))).Decode()
+	require.NoError(t, err)
+	return decoded
+}
+
 // encodeValue encodes a value and returns the bytes
 func encodeValue[T any](t *testing.T, value T) []byte {
 	t.Helper()

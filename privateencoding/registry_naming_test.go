@@ -18,9 +18,10 @@ func TestTypeRegistrationName(t *testing.T) {
 		assert.Equal(t, expected, typeRegistrationName(rt))
 	})
 
-	t.Run("pointer_named_type_keeps_string_form", func(t *testing.T) {
+	t.Run("pointer_to_named_type_is_qualified", func(t *testing.T) {
 		rt := reflect.TypeFor[*registryNamedType]()
-		assert.Equal(t, rt.String(), typeRegistrationName(rt))
+		expected := "*" + rt.Elem().PkgPath() + "." + rt.Elem().Name()
+		assert.Equal(t, expected, typeRegistrationName(rt))
 	})
 
 	t.Run("unnamed_type_uses_string_form", func(t *testing.T) {
@@ -35,4 +36,15 @@ func TestRegister(t *testing.T) {
 			Register[any]()
 		})
 	})
+}
+
+type localNameA struct{ A int }
+
+func TestRegistry_UnnamedCompositeTypesAreQualified(t *testing.T) {
+	// an unnamed composite of a named type is named through the named type's import path, so two
+	// packages' models.User do not collide on "*models.User"
+	name := typeRegistrationName(reflect.TypeFor[*localNameA]())
+	assert.Contains(t, name, reflect.TypeFor[localNameA]().PkgPath())
+	name = typeRegistrationName(reflect.TypeFor[map[string][]localNameA]())
+	assert.Contains(t, name, reflect.TypeFor[localNameA]().PkgPath())
 }

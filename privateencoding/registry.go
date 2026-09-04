@@ -3,6 +3,7 @@ package privateencoding
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"sync"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -21,40 +22,27 @@ func Register[T any]() {
 	RegisterType(reflect.TypeFor[T]())
 }
 
+// RegisterType records rt under its registration name: the tag written for a value of rt behind an
+// interface, and read back to pick the type to decode into. The tag must name exactly one type, so
+// two distinct types with the same name are a hard error.
 func RegisterType(rt reflect.Type) {
 	if rt.Kind() == reflect.Interface {
 		panic("interface types cannot be registered")
 	}
-	registerNamedType(rt, typeRegistrationName(rt))
-}
+	name := typeRegistrationName(rt)
 
-func registerNamedType(rt reflect.Type, name string) {
 	registerMu.Lock()
 	defer registerMu.Unlock()
-
-	if existingName, ok := registeredTypeNameByType.Load(rt); ok {
-		if existingName == name {
-			return
-		}
+	if _, ok := registeredTypeNameByType.Load(rt); ok {
+		return
+	}
+	if existing, ok := registeredTypeByName.Load(name); ok {
 		panic(fmt.Sprintf(
-			"privateencoding: type %s already registered as %q (got %q)",
-			rt.String(),
-			existingName,
-			name,
+			"privateencoding: two distinct types share the registration name %q (%s and %s); "+
+				"a type declared inside a function is known only by its package and name, so give them distinct names",
+			name, existing.String(), rt.String(),
 		))
 	}
-	if existingType, ok := registeredTypeByName.Load(name); ok {
-		if existingType == rt {
-			return
-		}
-		panic(fmt.Sprintf(
-			"privateencoding: type name %q already registered for %s (got %s)",
-			name,
-			existingType.String(),
-			rt.String(),
-		))
-	}
-
 	registeredTypeNameByType.Store(rt, name)
 	registeredTypeByName.Store(name, rt)
 }
@@ -89,28 +77,27 @@ func init() {
 	Register[[]byte]()
 }
 
-// (logic copied from gob package)
-// typeRegistrationName mirrors the standard library Register name derivation.
+// typeRegistrationName creates a (best effort) unique name for the given type.
 func typeRegistrationName(rt reflect.Type) string {
-	// Default to printed representation for unnamed types.
-	name := rt.String()
-
-	// For named types (or pointers to them), qualify with import path.
-	// The pointer behavior intentionally mirrors existing compatibility behavior.
-	star := ""
-	if rt.Name() == "" {
-		if pt := rt; pt.Kind() == reflect.Pointer {
-			star = "*"
-			rt = pt
-		}
-	}
 	if rt.Name() != "" {
 		if rt.PkgPath() == "" {
-			name = star + rt.Name()
-		} else {
-			name = star + rt.PkgPath() + "." + rt.Name()
+			return rt.Name()
 		}
+		return rt.PkgPath() + "." + rt.Name()
 	}
-
-	return name
+	switch rt.Kind() {
+	case reflect.Pointer:
+		return "*" + typeRegistrationName(rt.Elem())
+	case reflect.Slice:
+		return "[]" + typeRegistrationName(rt.Elem())
+	case reflect.Array:
+		return "[" + strconv.Itoa(rt.Len()) + "]" + typeRegistrationName(rt.Elem())
+	case reflect.Map:
+		return "map[" + typeRegistrationName(rt.Key()) + "]" + typeRegistrationName(rt.Elem())
+	case reflect.Chan:
+		return "chan " + typeRegistrationName(rt.Elem())
+	default:
+		// structs, funcs, and interfaces are spelled by reflect; their element types are not qualified
+		return rt.String()
+	}
 }

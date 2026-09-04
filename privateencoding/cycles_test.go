@@ -53,3 +53,21 @@ func TestEncoder_OnlySyncTypesAreSkipped(t *testing.T) {
 		assert.NotEqual(t, encodeValue(t, &lockable{1}), encodeValue(t, &lockable{2}))
 	})
 }
+
+type firstFieldAlias struct {
+	Backing [4]int
+	View    []int
+	Self    *[4]int
+}
+
+func TestEncoder_AliasOfOwnFirstFieldIsNotACycle(t *testing.T) {
+	// a struct and its first field share an address, so a pointer or slice into the first field looks
+	// like the enclosing pointer if only the address is compared
+	v := &firstFieldAlias{Backing: [4]int{1, 2, 3, 4}}
+	v.View = v.Backing[:2]
+	v.Self = &v.Backing
+	decoded := roundTrip(t, v)
+	assert.Equal(t, v.Backing, decoded.Backing)
+	assert.Equal(t, []int{1, 2}, decoded.View)
+	assert.Equal(t, &v.Backing, decoded.Self)
+}
