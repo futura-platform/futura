@@ -195,6 +195,16 @@ func (e *Encoder[T]) encodeValue(v reflect.Value, path string) error {
 	return e.encodeComplex(v, path)
 }
 
+// encodeToBytes encodes v on its own, sharing this encoder's cycle detection, and returns the bytes.
+func (e *Encoder[T]) encodeToBytes(v reflect.Value, path string) ([]byte, error) {
+	var buf bytes.Buffer
+	sub := &Encoder[T]{w: &buf, msgpackEncoder: msgpack.NewEncoder(&buf), visiting: e.visiting}
+	if err := sub.encodeValue(v, path); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (e *Encoder[T]) mustEncodeSimple(v any) error {
 	if err, isSimple := e.encodeSimple(v); err != nil {
 		return err
@@ -296,40 +306,42 @@ func (e *Encoder[T]) encodeComplex(v reflect.Value, path string) error {
 			if err := e.mustEncodeSimple(v.Len()); err != nil {
 				return encodePathError("len("+path+")", err)
 			}
-			type sortableEntry struct {
-				key, value reflect.Value
-				encodedKey []byte
+			// Entries are written in an order that depends only on their contents, so that a map encodes
+			// to the same bytes on every call. Both the key and the value take part in the order: distinct
+			// keys can encode identically (pointers encode as their pointee, every NaN encodes the same), and
+			// their entries would otherwise stay in Go's randomized iteration order.
+			type entry struct {
+				encodedKey, encodedValue []byte
 			}
-			entries := make([]sortableEntry, 0, v.Len())
+			entries := make([]entry, 0, v.Len())
 			i := 0
 			for iter := v.MapRange(); iter.Next(); i++ {
-				encodedKey := make([]byte, 0, 32)
-				buf := bytes.NewBuffer(encodedKey)
-				enc := NewEncoder[reflect.Value](buf)
 				addressableKey := reflect.New(iter.Key().Type()).Elem()
 				addressableKey.Set(iter.Key())
-				if err := enc.encodeValue(addressableKey, path+"[key-"+strconv.Itoa(i)+"]"); err != nil {
+				encodedKey, err := e.encodeToBytes(addressableKey, path+"[key-"+strconv.Itoa(i)+"]")
+				if err != nil {
 					return err
 				}
-				entries = append(entries, sortableEntry{
-					key:        addressableKey,
-					value:      iter.Value(),
-					encodedKey: buf.Bytes(),
-				})
+				addressableValue := reflect.New(iter.Value().Type()).Elem()
+				addressableValue.Set(iter.Value())
+				encodedValue, err := e.encodeToBytes(addressableValue, path+"[val-"+strconv.Itoa(i)+"]")
+				if err != nil {
+					return err
+				}
+				entries = append(entries, entry{encodedKey, encodedValue})
 			}
 			sort.Slice(entries, func(i, j int) bool {
-				return bytes.Compare(entries[i].encodedKey, entries[j].encodedKey) < 0
+				if c := bytes.Compare(entries[i].encodedKey, entries[j].encodedKey); c != 0 {
+					return c < 0
+				}
+				return bytes.Compare(entries[i].encodedValue, entries[j].encodedValue) < 0
 			})
 			for i, entry := range entries {
-				_, err := e.w.Write(entry.encodedKey)
-				if err != nil {
+				if _, err := e.w.Write(entry.encodedKey); err != nil {
 					return encodePathError(path+"[key-"+strconv.Itoa(i)+"]", err)
 				}
-				addressableValue := reflect.New(entry.value.Type()).Elem()
-				addressableValue.Set(entry.value)
-				// Use indexed path for values to avoid expensive formatting.
-				if err := e.encodeValue(addressableValue, path+"[val-"+strconv.Itoa(i)+"]"); err != nil {
-					return err
+				if _, err := e.w.Write(entry.encodedValue); err != nil {
+					return encodePathError(path+"[val-"+strconv.Itoa(i)+"]", err)
 				}
 			}
 			return nil
