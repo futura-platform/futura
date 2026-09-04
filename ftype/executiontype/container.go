@@ -11,9 +11,10 @@ type TransactionalContainer datastore.Transactional[Container, ReadOnlyContainer
 
 // Container is a container for the flow execution state.
 // This allows for the flow execution state to be backed by any transactional storage mechanism.
-// All values in the container are expected to only be accessed by a single thread of execution,
-// so implementing an in-memory fast path is strongly recommended for optimal performance,
-// alongside a durable storage layer for fault tolerance.
+// Write transactions are never concurrent with each other or with a read: the runtime serializes them,
+// since every write is part of the single-threaded flow. Read transactions may run concurrently with
+// each other, since state can be read from any goroutine. An in-memory fast path is strongly
+// recommended for optimal performance, alongside a durable storage layer for fault tolerance.
 type Container interface {
 	ReadOnlyContainer
 	// call order
