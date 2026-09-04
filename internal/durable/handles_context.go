@@ -74,10 +74,15 @@ func (h *Handles) Flush() map[string][]byte {
 // Cleanup releases every cached handle that has something to release, in LIFO order.
 func (h *Handles) Cleanup() error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	var err error
+	toCleanup := make([]Handle, 0, len(h.order))
 	for i := len(h.order) - 1; i >= 0; i-- {
-		err = errors.Join(err, h.byKey[h.order[i]].Cleanup())
+		toCleanup = append(toCleanup, h.byKey[h.order[i]])
+	}
+	h.mu.Unlock()
+
+	var err error
+	for _, handle := range toCleanup {
+		err = errors.Join(err, handle.Cleanup())
 	}
 	return err
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
@@ -417,6 +418,38 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		}
 	})
 
+	t.Run("a cleanup can use another handle", func(t *testing.T) {
+		// cleanup runs user code, so it must not run under the cache's lock: a cleanup that records
+		// what it did in another handle provides that handle through the same cache
+		audit := NewPlainDurableHandle("cleanupAudit", func() *int { v := 0; return &v })
+		var flowCtx context.Context
+		conn := NewDurableHandle[int]("cleanupUsesAnotherHandle",
+			func() *int { v := 0; return &v },
+			func(input []byte) (*int, error) { v := int(input[0]); return &v, nil },
+			func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
+			func(*int) error {
+				*audit.Use(audit.ProvideContext(flowCtx))++
+				return nil
+			},
+		)
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+				b = conn.Provide(b)
+				flowCtx = b
+				conn.Use(b)
+				return 0, nil
+			}, struct{}{})
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			assert.NoError(t, err)
+		case <-time.After(3 * time.Second):
+			t.Fatal("the execution never ended: the cleanup blocked on the handles cache")
+		}
+	})
 	t.Run("handles can be provided from a goroutine bound to the execution", func(t *testing.T) {
 		a := NewPlainDurableHandle("providedFromGoroutine", func() *int { v := 0; return &v })
 		c := NewPlainDurableHandle("providedFromFlow", func() *int { v := 0; return &v })
