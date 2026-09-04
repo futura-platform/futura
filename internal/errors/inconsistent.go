@@ -3,6 +3,7 @@ package ftrerrors
 import (
 	"errors"
 	"fmt"
+	"runtime/debug"
 )
 
 var ErrInconsistentState = errors.New("inconsistent state")
@@ -30,8 +31,12 @@ func Recovering(fn func() error) (err error) {
 func PanicError(recovered any) error {
 	switch r := recovered.(type) {
 	case error:
-		return fmt.Errorf("%w: %w", ErrFlowPanic, r)
+		if errors.Is(r, ErrFlowPanic) {
+			// already reported by a deeper recover, which also had the better stack
+			return r
+		}
+		return fmt.Errorf("%w: %w\n%s", ErrFlowPanic, r, debug.Stack())
 	default:
-		return fmt.Errorf("%w: %v", ErrFlowPanic, r)
+		return fmt.Errorf("%w: %v\n%s", ErrFlowPanic, r, debug.Stack())
 	}
 }

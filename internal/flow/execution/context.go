@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/futura-platform/futura/flog"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
@@ -90,12 +91,12 @@ var ErrRestartReplay = errors.New("restarting replay")
 // (Regardless of whether or not the last replay was successful).
 // This will also skip the default end of replay behavior, including rewinding the sequence index and resetting the replay flags.
 // It must be called with mu held.
-func (f *FlowExecution) restartCurrentReplay(cause error) {
+func (f *FlowExecution) restartCurrentReplay(ctx context.Context, cause error) {
 	if f.cancelCurrentReplay == nil {
 		return
 	}
 
-	slog.Debug("restarting replay", slog.String("cause", cause.Error()))
+	flog.FromContext(ctx).Debug("restarting replay", slog.String("cause", cause.Error()))
 	f.cancelCurrentReplay(fmt.Errorf("%w: %w", ErrRestartReplay, cause))
 }
 
@@ -224,10 +225,10 @@ var ErrWrittenBehind = errors.New("a durable value was written behind")
 // The value is visible to ReadBehind immediately, and is flushed to the container, together with a bump of the
 // dirty epoch, at the start of the next replay. The current replay is restarted, since the sequence it was
 // evaluated against may no longer hold.
-func (f *FlowExecution) WriteBehind(durableKey string, value []byte) {
+func (f *FlowExecution) WriteBehind(ctx context.Context, durableKey string, value []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.restartCurrentReplay(ErrWrittenBehind)
+	f.restartCurrentReplay(ctx, ErrWrittenBehind)
 	if f.dirty == nil {
 		f.dirty = map[string][]byte{}
 	}

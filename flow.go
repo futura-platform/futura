@@ -3,8 +3,6 @@ package futura
 import (
 	"context"
 	"errors"
-	"fmt"
-	"runtime/debug"
 
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
@@ -66,7 +64,7 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 	// the loop reports the flow's panics as errors; this is the backstop for anything that escapes it
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%w\n%s", ftrerrors.PanicError(r), debug.Stack())
+			err = ftrerrors.PanicError(r)
 		}
 	}()
 

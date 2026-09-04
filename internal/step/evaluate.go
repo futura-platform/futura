@@ -102,7 +102,11 @@ func evaluateWithCallstack[A comparable, R any](
 			sequence.MarkFailed(ctx)
 		}
 		if r != nil {
-			panic(r)
+			// a termination is the runtime's own signal should pass through untouched
+			if _, terminated := AsReplayTerminated(r); terminated {
+				panic(r)
+			}
+			panic(fmt.Errorf("%s: %w", fn.Label(), ftrerrors.PanicError(r)))
 		} else if err != nil {
 			err = fmt.Errorf("%s: %w: %w", fn.Label(), ErrEvalFailed, err)
 		}

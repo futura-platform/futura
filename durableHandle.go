@@ -5,10 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 
+	"github.com/futura-platform/futura/flog"
 	"github.com/futura-platform/futura/internal/durable"
 	"github.com/futura-platform/futura/internal/flow/execution"
 )
@@ -104,7 +104,7 @@ func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *
 	r.valueLoader.Do(func() {
 		defer func() {
 			if rr := recover(); rr != nil {
-				slog.Error("failed to load durable value", "error", rr)
+				flog.FromContext(ctx).Error("failed to load durable value", "error", rr)
 				r.valueLoadErr = rr
 			}
 		}()

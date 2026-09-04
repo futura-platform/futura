@@ -172,6 +172,19 @@ func TestFlow(t *testing.T) {
 		}, nil)
 		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, expectedErr)
+		assert.Contains(t, err.Error(), "flow_test.go", "the panic's stack is attached")
+	})
+	t.Run("a panic in a step names the step", func(t *testing.T) {
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+			return futura.Source(b, func(ctx context.Context) (string, error) {
+				var s []int
+				return "", fmt.Errorf("%d", s[3])
+			}, ftype.WithLabel("theStepThatPanicked"))
+		}, nil)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		assert.Contains(t, err.Error(), "theStepThatPanicked")
+		assert.Contains(t, err.Error(), "index out of range")
+		assert.Contains(t, err.Error(), "flow_test.go", "the panic's stack is attached")
 	})
 	t.Run("Flow recovers from panics with non-error values", func(t *testing.T) {
 		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {

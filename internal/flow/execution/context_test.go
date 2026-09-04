@@ -203,7 +203,7 @@ func TestWriteBehind_RestartsTheCurrentReplay(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 
-		f.WriteBehind("key", nil)
+		f.WriteBehind(t.Context(), "key", nil)
 
 		cause := context.Cause(replayCtx)
 		assert.ErrorIs(t, cause, ErrRestartReplay)
@@ -215,20 +215,20 @@ func TestWriteBehind_RestartsTheCurrentReplay(t *testing.T) {
 		replay.Cancel(first, nil)
 		second, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 
-		f.WriteBehind("key", nil)
+		f.WriteBehind(t.Context(), "key", nil)
 		assert.ErrorIs(t, context.Cause(second), ErrRestartReplay)
 		assert.NotErrorIs(t, context.Cause(first), ErrRestartReplay)
 	})
 	t.Run("does not need a replay to restart", func(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
-		assert.NotPanics(t, func() { f.WriteBehind("key", nil) })
+		assert.NotPanics(t, func() { f.WriteBehind(t.Context(), "key", nil) })
 	})
 	t.Run("does not restart a replay that has already ended", func(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		replayCtx, _ := f.StartNewReplay(WithFlow(t.Context(), f))
 		replay.Cancel(replayCtx, nil)
 
-		f.WriteBehind("key", nil)
+		f.WriteBehind(t.Context(), "key", nil)
 		// cancellation is idempotent: the first cause stands
 		assert.NotErrorIs(t, context.Cause(replayCtx), ErrRestartReplay)
 	})
@@ -246,7 +246,7 @@ func TestWriteBehind_RestartsTheCurrentReplay(t *testing.T) {
 				}
 			}
 		}()
-		f.WriteBehind("key", []byte{1})
+		f.WriteBehind(t.Context(), "key", []byte{1})
 		assert.True(t, <-seen, "the replay must already be cancelled when the value becomes readable")
 	})
 }
@@ -401,7 +401,7 @@ func TestWriteBehind(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 		ctx := WithFlow(t.Context(), f)
 
-		f.WriteBehind("key", []byte{1})
+		f.WriteBehind(t.Context(), "key", []byte{1})
 		value, ok := f.ReadBehind(ctx, "key")
 		assert.True(t, ok)
 		assert.Equal(t, []byte{1}, value)
@@ -423,8 +423,8 @@ func TestWriteBehind(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
-		f.WriteBehind("first", []byte{1})
-		f.WriteBehind("second", []byte{2})
+		f.WriteBehind(t.Context(), "first", []byte{1})
+		f.WriteBehind(t.Context(), "second", []byte{2})
 		startReplay(t, f)
 
 		for key, expected := range map[string][]byte{"first": {1}, "second": {2}} {
@@ -439,8 +439,8 @@ func TestWriteBehind(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 		ctx := WithFlow(t.Context(), f)
 
-		f.WriteBehind("key", []byte{1})
-		f.WriteBehind("key", []byte{2})
+		f.WriteBehind(t.Context(), "key", []byte{1})
+		f.WriteBehind(t.Context(), "key", []byte{2})
 		value, _ := f.ReadBehind(ctx, "key")
 		assert.Equal(t, []byte{2}, value)
 
@@ -453,7 +453,7 @@ func TestWriteBehind(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 		ctx := WithFlow(t.Context(), f)
 
-		f.WriteBehind("key", []byte{1})
+		f.WriteBehind(t.Context(), "key", []byte{1})
 		startReplay(t, f)
 		assert.NoError(t, c.StoreDurable(GenericDurableKey("key"), []byte{9}))
 
@@ -464,7 +464,7 @@ func TestWriteBehind(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
 
-		f.WriteBehind("key", nil)
+		f.WriteBehind(t.Context(), "key", nil)
 		startReplay(t, f)
 		assert.Equal(t, uint64(1), getEpoch(t, c))
 
@@ -477,7 +477,7 @@ func TestWriteBehind(t *testing.T) {
 		strict := containertest.NewStrict(c)
 		f := running(t, NewFlowExecutionWithContainer(strict))
 
-		f.WriteBehind("key", []byte{1})
+		f.WriteBehind(t.Context(), "key", []byte{1})
 		dirtyEpoch := startReplay(t, f)
 
 		assert.Equal(t, int64(containertest.Attempts), strict.Calls.Load(), "the closure should have run once per attempt")
@@ -508,7 +508,7 @@ func TestWriteBehind(t *testing.T) {
 		assert.True(t, ok)
 		stop()
 
-		f.WriteBehind("key", []byte{1})
+		f.WriteBehind(t.Context(), "key", []byte{1})
 		assert.Equal(t, uint64(0), getEpoch(t, c))
 
 		stop, ok = f.TryStartRun()

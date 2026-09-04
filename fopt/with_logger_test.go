@@ -29,4 +29,22 @@ func TestWithLogger(t *testing.T) {
 		assert.Equal(t, "success", r)
 		assert.Positive(t, logBuf.Len())
 	})
+	t.Run("every runtime log line goes through the flow's logger", func(t *testing.T) {
+		flowLog := bytes.NewBuffer(nil)
+		globalLog := bytes.NewBuffer(nil)
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(globalLog, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		defer slog.SetDefault(previous)
+
+		_, err := futura.NewFlowFromContainer[*any, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (int, error) {
+			s := futura.State(b, 0)
+			if s.V() == 0 {
+				s.Set(1) // restarts the replay, which the runtime logs
+			}
+			return s.V(), nil
+		}, nil, fopt.WithLogger(slog.New(slog.NewTextHandler(flowLog, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+		assert.NoError(t, err)
+		assert.Contains(t, flowLog.String(), "restarting replay")
+		assert.Empty(t, globalLog.String(), "the runtime logged past the flow's logger")
+	})
 }

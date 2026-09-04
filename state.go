@@ -90,7 +90,7 @@ func stateWithInitialValue[T comparable](b FlowBuilder, initialValue T) StateCon
 				return
 			}
 
-			f.WriteBehind(stateKey, encoded)
+			f.WriteBehind(b, stateKey, encoded)
 		},
 	}
 }
