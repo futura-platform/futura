@@ -140,7 +140,7 @@ func (d *Decoder[T]) decodeValue(v reflect.Value, path string) error {
 
 	// Ignore lock-like, non-copyable structures (e.g. sync.Mutex). These fields
 	// are not part of logical state and are intentionally not serialized.
-	if isNoCopyStructType(uv.Type()) {
+	if isNoCopyType(uv.Type()) {
 		if uv.CanSet() {
 			uv.Set(reflect.Zero(uv.Type()))
 		}
