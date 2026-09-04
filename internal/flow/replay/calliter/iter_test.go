@@ -43,6 +43,38 @@ func TestFrameIter(t *testing.T) {
 	})
 }
 
+func inlineMe(i int) int { return i + 1 }
+
+//go:noinline
+func viaInline(n int, f func()) {
+	if n == 0 {
+		f()
+		return
+	}
+	viaInline(inlineMe(n)-2, f)
+}
+
+func TestFrameIter_ChunkBoundariesUnderInlining(t *testing.T) {
+	// an inlined call is one PC that expands to several frames, so a chunk boundary must never fall
+	// inside one; every chunk size is checked frame by frame against runtime.Caller
+	for _, size := range []int{1, 2, 3, 5, 8} {
+		viaInline(20, func() {
+			baseSkip := 1
+			i := 0
+			for frame := range NewFrameIter(size, baseSkip) {
+				_, file, line, ok := runtime.Caller(baseSkip + i + 3)
+				if !ok {
+					break
+				}
+				assert.Equal(t, line, frame.Line, "size=%d frame %d", size, i)
+				assert.Equal(t, file, frame.File, "size=%d frame %d", size, i)
+				i++
+			}
+			assert.Greater(t, i, 20, "size=%d", size)
+		})
+	}
+}
+
 func matchesRuntimeCallers(t *testing.T, initialBufferSize int) {
 	baseSkip := 2
 	iter := NewFrameIter(initialBufferSize, baseSkip)
