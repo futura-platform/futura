@@ -58,8 +58,6 @@ type durableResolver[T any] struct {
 	handleId int32
 	marshal  func(*T) ([]byte, error)
 	cleanup  func(*T) error
-	// run is the execution this resolver was made for. Its value is only meaningful there.
-	run uint64
 
 	valueLoader  sync.Once
 	valueLoadErr any
@@ -182,13 +180,11 @@ func (d *DurableHandle[T]) ProvideContext(ctx context.Context) context.Context {
 
 	// either load the existing resolver, or create a new one.
 	// the cache cleans its resolvers up when the execution ends.
-	run := exec.Run()
 	resolver := handles.LoadOrCompute(d.key, func() durable.Handle {
 		return &durableResolver[T]{
 			handleId: d.id,
 			marshal:  d.marshal,
 			cleanup:  d.cleanup,
-			run:      run,
 		}
 	})
 	return context.WithValue(ctx, d.key, resolver.(*durableResolver[T]))
@@ -210,7 +206,7 @@ func (d *DurableHandle[T]) Use(ctx context.Context) *T {
 		panic(fmt.Errorf("%w: %s", ErrDurableResolverNotFound, d.key))
 	} else if r.handleId != d.id {
 		panic(fmt.Errorf("%w: %s, expected %d, got %d", ErrDurableResolverMismatch, d.key, d.id, r.handleId))
-	} else if execution.MustFromContext(ctx).Run() != r.run {
+	} else if handles, _ := durable.GetHandles(ctx); handles != execution.MustFromContext(ctx).Handles() {
 		// the value belongs to an execution that ended: it was cleaned up, and its changes no longer flush
 		panic(fmt.Errorf("%w: %s", ErrDurableResolverStale, d.key))
 	}
