@@ -296,8 +296,8 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	changedHandles := f.handles.Flush()
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		i := sequence.GetIndex(ctx)
+	i := sequence.GetIndex(ctx)
+	f.mustTransact(ctx, func(_ context.Context, tx executiontype.Container) {
 		size := tx.CallOrderLength()
 		if i > size {
 			panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
