@@ -101,9 +101,6 @@ func (r *durableResolver[T]) Flush() (value []byte, changed bool) {
 }
 
 func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *T {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	r.valueLoader.Do(func() {
 		defer func() {
 			if rr := recover(); rr != nil {
@@ -114,21 +111,24 @@ func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *
 
 		exec := execution.MustFromContext(ctx)
 		serialized, ok := exec.LoadDurable(ctx, string(d.key))
+		var value *T
 		if !ok {
-			r.value = d.constructor()
+			value = d.constructor()
 		} else {
-			value, err := d.unmarshal(serialized)
-			if err != nil {
+			var err error
+			if value, err = d.unmarshal(serialized); err != nil {
 				panic(err)
 			}
-			r.value = value
-			r.flushed = serialized
 		}
+
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.value = value
+		r.flushed = serialized
 	})
 	if r.valueLoadErr != nil {
 		panic(r.valueLoadErr)
 	}
-
 	return r.value
 }
 
