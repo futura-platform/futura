@@ -101,11 +101,20 @@ func isMoType(t reflect.Type) bool {
 		t.PkgPath() == "github.com/samber/mo"
 }
 
+// usesBinaryForm reports whether values of typ are written as the bytes of their own MarshalBinary,
+// rather than field by field.
+func usesBinaryForm(typ reflect.Type) bool {
+	if isMoType(typ) || !typ.Implements(binaryMarshalerType) {
+		return false
+	}
+	if typ.Kind() == reflect.Pointer {
+		return typ.Implements(binaryUnmarshalerType)
+	}
+	return reflect.PointerTo(typ).Implements(binaryUnmarshalerType)
+}
+
 func implementsBinaryMarshaler(v reflect.Value) (func() encoding.BinaryMarshaler, bool) {
-	typ := v.Type()
-	if !typ.Implements(binaryMarshalerType) {
-		return nil, false
-	} else if isMoType(typ) {
+	if !usesBinaryForm(v.Type()) {
 		return nil, false
 	}
 	return func() encoding.BinaryMarshaler {
