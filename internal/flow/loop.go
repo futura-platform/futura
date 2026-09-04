@@ -49,7 +49,9 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 	defer func() {
 		if replayCtx != nil {
 			replay.Cancel(replayCtx, ErrReplayEnded)
-			sequence.RunDeferred(replayCtx)
+			if deferErr := sequence.RunDeferred(replayCtx); deferErr != nil {
+				err = errors.Join(err, fmt.Errorf("deferred functions: %w", deferErr))
+			}
 		}
 	}()
 

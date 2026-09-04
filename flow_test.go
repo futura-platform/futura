@@ -3,11 +3,14 @@ package futura_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/fopt"
+	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow"
@@ -135,6 +138,32 @@ func TestFlow(t *testing.T) {
 		r, err := f.Execute(t.Context(), fn, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, "result", r)
+	})
+	t.Run("a panic in a deferred function is reported like any other, after the flow has ended", func(t *testing.T) {
+		deferErr := errors.New("defer boom")
+		var seenByHook error
+		hookErr := errors.New("hook error")
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			futura.Defer(b, func() { panic(deferErr) })
+			return 42, nil
+		}, struct{}{}, fopt.WithOnExecutionEnd(func(_ context.Context, err error) error {
+			seenByHook = err
+			return hookErr
+		}))
+		assert.Equal(t, 42, r, "the flow's result is not affected by its deferred functions")
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		assert.ErrorIs(t, err, deferErr)
+		assert.ErrorIs(t, err, hookErr, "the end hook's error is joined")
+		assert.ErrorIs(t, seenByHook, deferErr, "the end hook sees the flow's error")
+
+		sentinel := errors.New("the flow's own reason")
+		_, err = futura.NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			futura.Defer(b, func() { panic(deferErr) })
+			return 0, fmt.Errorf("%w: %w", ftype.ErrCancelFlow, sentinel)
+		}, struct{}{})
+		assert.ErrorIs(t, err, ftype.ErrCancelFlow, "the flow's own error survives")
+		assert.ErrorIs(t, err, sentinel)
+		assert.ErrorIs(t, err, deferErr)
 	})
 	t.Run("Flow recovers from panics", func(t *testing.T) {
 		var expectedErr = errors.New("expected panic")

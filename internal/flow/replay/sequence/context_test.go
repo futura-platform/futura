@@ -55,7 +55,8 @@ func TestSequenceContext(t *testing.T) {
 		sequence.Defer(ctx, func() { panic("second deferred panics") })
 		sequence.Defer(ctx, func() { calls = append(calls, 3) })
 
-		assert.PanicsWithValue(t, "second deferred panics", func() { sequence.RunDeferred(ctx) })
+		err := sequence.RunDeferred(ctx)
+		assert.ErrorContains(t, err, "second deferred panics")
 		assert.Equal(t, []int{3, 1}, calls)
 	})
 }

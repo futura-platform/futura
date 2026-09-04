@@ -2,8 +2,10 @@ package sequence
 
 import (
 	"context"
+	"errors"
 
 	mapset "github.com/deckarep/golang-set/v2"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/moment"
 )
@@ -16,14 +18,14 @@ type state struct {
 	flags    replay.Flags
 	index    int
 	seen     mapset.Set[moment.Identity]
-	deferred *func()
+	deferred *func() error
 	// failed is set once a step in this replay has not completed. Nothing after it may evaluate.
 	failed bool
 }
 
 // With wraps the context with a new sequence index.
 func With(ctx context.Context, flags replay.Flags) context.Context {
-	deferred := func() {}
+	deferred := func() error { return nil }
 	return context.WithValue(ctx, ctxKey, &state{
 		flags:    flags,
 		seen:     mapset.NewSet[moment.Identity](),
@@ -77,14 +79,14 @@ func IsSeen(ctx context.Context, identity moment.Identity) bool {
 func Defer(ctx context.Context, fn func()) {
 	s := getSequenceState(ctx)
 	lastDeferred := *s.deferred
-	*s.deferred = func() {
+	*s.deferred = func() error {
 		// the ones registered before run even if fn panics, the same as Go's defer
-		defer lastDeferred()
-		fn()
+		return errors.Join(ftrerrors.Recovering(func() error { fn(); return nil }), lastDeferred())
 	}
 }
 
-// RunDeferred runs all deferred functions in reverse order of registration (LIFO).
-func RunDeferred(ctx context.Context) {
-	(*getSequenceState(ctx).deferred)()
+// RunDeferred runs all deferred functions in reverse order of registration (LIFO), and returns the
+// panics any of them raised, as errors.
+func RunDeferred(ctx context.Context) error {
+	return (*getSequenceState(ctx).deferred)()
 }
