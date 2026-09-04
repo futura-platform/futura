@@ -15,6 +15,7 @@ import (
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
@@ -327,7 +328,7 @@ func TestState(t *testing.T) {
 			return state.V(), nil
 		}, struct{}{})
 		assert.ErrorIs(t, err, context.Canceled)
-		assert.NotErrorIs(t, err, futura.ErrFlowPanic)
+		assert.NotErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.False(t, reachedAfterSeed)
 		assert.Equal(t, 0, r)
 	})

@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/futura-platform/futura/ftype/seal"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/errors"
 )
 
 // Identity is a unique identifier for a moment.

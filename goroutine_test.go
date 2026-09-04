@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/goroutinebind"
 	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/internal/utils/containertest"
@@ -27,7 +28,7 @@ func TestBindToGoroutine(t *testing.T) {
 				defer cancel()
 				return "", nil
 			}, struct{}{})
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 	})
 	t.Run("BindToGoroutine passes AssertBoundGoroutine", func(t *testing.T) {
 		_, err := futura.NewFlowFromContainer[struct{}, string](containertest.NewInMemory()).Execute(t.Context(),
@@ -95,7 +96,7 @@ func TestBindToGoroutine(t *testing.T) {
 			}, struct{}{})
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, futura.ErrFlowPanic,
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic,
 			"the step should panic when it returns while goroutines are still bound")
 		assert.ErrorIs(t, err, step.ErrGoroutinesNotExited)
 	})
@@ -113,7 +114,7 @@ func TestBindToGoroutine(t *testing.T) {
 			}, struct{}{})
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, futura.ErrGoroutineAlreadyBound)
 	})
 
@@ -161,7 +162,7 @@ func TestBindToGoroutine(t *testing.T) {
 			}, struct{}{})
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, step.ErrGoroutinesNotExited)
 	})
 

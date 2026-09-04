@@ -12,7 +12,7 @@ import (
 
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
 	"github.com/futura-platform/futura/internal/goroutinebind"

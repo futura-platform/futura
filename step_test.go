@@ -8,6 +8,7 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
@@ -86,7 +87,7 @@ func TestStep(t *testing.T) {
 				}
 				return v, err
 			}, struct{}{})
-			assert.ErrorIs(t, err, futura.ErrFlowPanic)
+			assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 			assert.ErrorIs(t, err, step.ErrStepAfterFailure)
 			assert.False(t, createRan)
 		})
@@ -99,7 +100,7 @@ func TestStep(t *testing.T) {
 				}()
 				return 0, futura.Action(b, func(ctx context.Context) error { secondRan = true; return nil })
 			}, struct{}{})
-			assert.ErrorIs(t, err, futura.ErrFlowPanic)
+			assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 			assert.ErrorIs(t, err, step.ErrStepAfterFailure)
 			assert.False(t, secondRan)
 		})
@@ -137,7 +138,7 @@ func TestStep(t *testing.T) {
 			}, struct{}{})
 		}
 		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, step.ErrNestedStep)
 
 		// only the outer step's slot was recorded, so a corrected flow resumes cleanly over it

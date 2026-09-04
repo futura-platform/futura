@@ -10,7 +10,7 @@ import (
 	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"

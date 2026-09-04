@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/futura-platform/futura/ftype"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/errors"
 )
 
 // WithOnExecutionEnd registers a callback that will be invoked once when a top-level

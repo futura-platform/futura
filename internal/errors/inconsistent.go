@@ -11,6 +11,8 @@ func InconsistentStateError(subErr error) error {
 	return fmt.Errorf("%w: %w", ErrInconsistentState, subErr)
 }
 
+// ErrFlowPanic reports a panic anywhere in an execution: the flow fn, a step, a wrapper, a
+// deferred function, a handle's cleanup, or an execution end hook.
 var ErrFlowPanic = errors.New("flow panicked")
 
 // Recovering calls fn, and reports a panic in it as an error instead of unwinding.

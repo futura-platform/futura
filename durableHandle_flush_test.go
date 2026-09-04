@@ -10,6 +10,7 @@ import (
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
@@ -153,7 +154,7 @@ func TestDurableHandle_ChangesAreCommittedWithTheStepsMemo(t *testing.T) {
 			ref := h.Use(b)
 			return 0, futura.Action(b, func(ctx context.Context) error { *ref = 1; return nil })
 		}, struct{}{}, fopt.WithMaxFailures(2))
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, marshalErr)
 	})
 	t.Run("an unchanged value is not stored again at every boundary", func(t *testing.T) {

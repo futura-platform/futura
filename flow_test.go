@@ -9,8 +9,8 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/internal/utils/containertest"
@@ -50,7 +50,7 @@ func TestFlow(t *testing.T) {
 				return "never reached", nil
 			}, nil)
 		})
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, execution.ErrFlowExecutionNotRunning)
 	})
 	t.Run("a builder from a replay that has ended cannot be used for a step", func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestFlow(t *testing.T) {
 				_, _ = futura.Source(b, func(ctx context.Context) (int, error) { stepCtx = ctx; return 1, nil })
 				panic("first execution panics")
 			}, nil)
-			assert.ErrorIs(t, err, futura.ErrFlowPanic)
+			assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 			assert.ErrorIs(t, context.Cause(stepCtx), flow.ErrReplayEnded)
 
 			ran := false
@@ -141,14 +141,14 @@ func TestFlow(t *testing.T) {
 		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic(expectedErr)
 		}, nil)
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, expectedErr)
 	})
 	t.Run("Flow recovers from panics with non-error values", func(t *testing.T) {
 		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic("not an error type")
 		}, nil)
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.Contains(t, err.Error(), "not an error type")
 	})
 

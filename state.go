@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/futura-platform/futura/ftype"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/goroutinebind"
 	"github.com/futura-platform/futura/moment"

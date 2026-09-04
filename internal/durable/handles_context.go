@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/errors"
 )
 
 type handlesContextKey string

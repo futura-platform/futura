@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/stretchr/testify/assert"
 )
 

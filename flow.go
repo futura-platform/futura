@@ -9,7 +9,7 @@ import (
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
-	ftrerrors "github.com/futura-platform/futura/internal/errors"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flowhooks"
@@ -20,9 +20,6 @@ type FlowFn[A, R any] func(b FlowBuilder, args A) (R, error)
 var (
 	ErrTopLevelFlowConflict = errors.New("do not call futura.Flow from within a flow")
 	ErrAlreadyRunning       = errors.New("flow is already running")
-	// ErrFlowPanic reports a panic anywhere in an execution: the flow fn, a step, a wrapper, a
-	// deferred function, a handle's cleanup, or an execution end hook.
-	ErrFlowPanic = ftrerrors.ErrFlowPanic
 )
 
 type Flow[A, R any] struct {

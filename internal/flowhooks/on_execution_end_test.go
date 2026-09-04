@@ -8,6 +8,7 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flowhooks"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
@@ -105,10 +106,10 @@ func TestWithOnExecutionEnd(t *testing.T) {
 				return hookErr
 			}),
 		)
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, hookErr)
 		assert.Equal(t, 1, calls)
-		assert.ErrorIs(t, seen, futura.ErrFlowPanic)
+		assert.ErrorIs(t, seen, ftrerrors.ErrFlowPanic)
 	})
 
 	t.Run("a hook that panics does not stop the others, and is reported", func(t *testing.T) {
@@ -121,7 +122,7 @@ func TestWithOnExecutionEnd(t *testing.T) {
 			flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error { panic("second hook panics") }),
 			flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error { order = append(order, "third"); return nil }),
 		)
-		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorContains(t, err, "second hook panics")
 		assert.Equal(t, []string{"third", "first"}, order)
 	})

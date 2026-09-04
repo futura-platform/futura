@@ -12,6 +12,7 @@ import (
 
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
+	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/futura-platform/futura/internal/utils/testutil"
@@ -438,7 +439,7 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 			third.Use(b)
 			return 0, nil
 		}, struct{}{})
-		assert.ErrorIs(t, err, ErrFlowPanic)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorContains(t, err, "second cleanup panics")
 		assert.Equal(t, []string{"third", "first"}, order)
 	})
