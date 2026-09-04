@@ -10,7 +10,6 @@ import (
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype/executiontype"
-	"github.com/futura-platform/futura/internal/errors"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/utils/containertest"
