@@ -10,6 +10,7 @@ import (
 	"github.com/futura-platform/futura/fopt"
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
@@ -217,14 +218,14 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, 0, afterStep)
 	})
 
-	t.Run("any other panic from the flow is not recovered by the loop", func(t *testing.T) {
+	t.Run("any other panic from the flow ends the execution with a flow panic error", func(t *testing.T) {
 		ctx := execution.WithFlow(t.Context(), execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
 		expected := errors.New("user panic")
-		assert.PanicsWithError(t, expected.Error(), func() {
-			loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
-				panic(expected)
-			}, &struct{}{})
-		})
+		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ *struct{}) (string, error) {
+			panic(expected)
+		}, &struct{}{})
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		assert.ErrorIs(t, err, expected)
 	})
 
 	t.Run("step memos should be stable after a branch is closed and reopened", func(t *testing.T) {

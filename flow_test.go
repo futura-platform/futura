@@ -94,6 +94,28 @@ func TestFlow(t *testing.T) {
 			assert.ErrorIs(t, err, flow.ErrStaleReplay)
 			assert.ErrorIs(t, err, flow.ErrReplayEnded)
 		})
+		t.Run("ended by a panic", func(t *testing.T) {
+			// a replay that unwinds by panic has ended just the same: its builder is dead, and every
+			// context derived from it is done
+			f := futura.NewFlowFromContainer[*any, int](containertest.NewInMemory())
+			var stale futura.FlowBuilder
+			var stepCtx context.Context
+			_, err := f.Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (int, error) {
+				stale = b
+				_, _ = futura.Source(b, func(ctx context.Context) (int, error) { stepCtx = ctx; return 1, nil })
+				panic("first execution panics")
+			}, nil)
+			assert.ErrorIs(t, err, futura.ErrFlowPanic)
+			assert.ErrorIs(t, context.Cause(stepCtx), flow.ErrReplayEnded)
+
+			ran := false
+			r, err := f.Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (int, error) {
+				return futura.Step(stale, func(ctx context.Context, _ struct{}) (int, error) { ran = true; return 42, nil }, struct{}{})
+			}, nil)
+			assert.ErrorIs(t, err, flow.ErrStaleReplay)
+			assert.False(t, ran)
+			assert.Equal(t, 0, r)
+		})
 	})
 	t.Run("do not execute a flow more than once concurrently", func(t *testing.T) {
 		fnEntered := make(chan struct{})

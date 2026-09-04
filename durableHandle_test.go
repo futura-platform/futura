@@ -418,6 +418,31 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		}
 	})
 
+	t.Run("a cleanup that panics does not stop the others, and is reported", func(t *testing.T) {
+		var order []string
+		newHandle := func(name string, cleanup func() error) *DurableHandle[int] {
+			return NewDurableHandle[int](name,
+				func() *int { v := 0; return &v },
+				func(input []byte) (*int, error) { v := int(input[0]); return &v, nil },
+				func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
+				func(*int) error { return cleanup() },
+			)
+		}
+		first := newHandle("panickingCleanupFirst", func() error { order = append(order, "first"); return nil })
+		second := newHandle("panickingCleanupSecond", func() error { panic("second cleanup panics") })
+		third := newHandle("panickingCleanupThird", func() error { order = append(order, "third"); return nil })
+		_, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			b = third.Provide(second.Provide(first.Provide(b)))
+			first.Use(b)
+			second.Use(b)
+			third.Use(b)
+			return 0, nil
+		}, struct{}{})
+		assert.ErrorIs(t, err, ErrFlowPanic)
+		assert.ErrorContains(t, err, "second cleanup panics")
+		assert.Equal(t, []string{"third", "first"}, order)
+	})
+
 	t.Run("a cleanup can use another handle", func(t *testing.T) {
 		// cleanup runs user code, so it must not run under the cache's lock: a cleanup that records
 		// what it did in another handle provides that handle through the same cache

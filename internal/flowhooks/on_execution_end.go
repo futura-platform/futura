@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/futura-platform/futura/ftype"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 )
 
 // WithOnExecutionEnd registers a callback that will be invoked once when a top-level
@@ -40,9 +41,10 @@ func RunOnExecutionEnd(ctx context.Context, executionErr error) error {
 	hooks, _ := ctx.Value(executionEndHooksKey).([]executionEndHook)
 	var hookErr error
 	for i := len(hooks) - 1; i >= 0; i-- {
-		if err := hooks[i](ctx, executionErr); err != nil {
-			hookErr = errors.Join(hookErr, err)
-		}
+		hookErr = errors.Join(
+			hookErr,
+			ftrerrors.Recovering(func() error { return hooks[i](ctx, executionErr) }),
+		)
 	}
 	return hookErr
 }

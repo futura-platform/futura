@@ -91,6 +91,41 @@ func TestWithOnExecutionEnd(t *testing.T) {
 		})
 	})
 
+	t.Run("a hook sees an execution that ended by panic as a failure, and its error is kept", func(t *testing.T) {
+		hookErr := errors.New("hook failed")
+		var seen error
+		calls := 0
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(
+			t.Context(),
+			func(b futura.FlowBuilder, _ *any) (string, error) { panic("boom") },
+			nil,
+			flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error {
+				calls++
+				seen = err
+				return hookErr
+			}),
+		)
+		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorIs(t, err, hookErr)
+		assert.Equal(t, 1, calls)
+		assert.ErrorIs(t, seen, futura.ErrFlowPanic)
+	})
+
+	t.Run("a hook that panics does not stop the others, and is reported", func(t *testing.T) {
+		var order []string
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(
+			t.Context(),
+			func(b futura.FlowBuilder, _ *any) (string, error) { return "success", nil },
+			nil,
+			flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error { order = append(order, "first"); return nil }),
+			flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error { panic("second hook panics") }),
+			flowhooks.WithOnExecutionEnd(func(ctx context.Context, err error) error { order = append(order, "third"); return nil }),
+		)
+		assert.ErrorIs(t, err, futura.ErrFlowPanic)
+		assert.ErrorContains(t, err, "second hook panics")
+		assert.Equal(t, []string{"third", "first"}, order)
+	})
+
 	t.Run("Multiple WithOnExecutionEnd options should be called reverse of their registration order", func(t *testing.T) {
 		callOrder := []string{}
 		onEnd1 := func(ctx context.Context, err error) error {

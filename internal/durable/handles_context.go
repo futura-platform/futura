@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 )
 
 type handlesContextKey string
@@ -82,7 +84,7 @@ func (h *Handles) Cleanup() error {
 
 	var err error
 	for _, handle := range toCleanup {
-		err = errors.Join(err, handle.Cleanup())
+		err = errors.Join(err, ftrerrors.Recovering(handle.Cleanup))
 	}
 	return err
 }

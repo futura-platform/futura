@@ -46,4 +46,16 @@ func TestSequenceContext(t *testing.T) {
 
 		assert.Equal(t, []int{3, 2, 1}, calls)
 	})
+	t.Run("a deferred function that panics does not stop the ones registered before it", func(t *testing.T) {
+		// the same as Go's defer: every deferred function runs, and the panic still propagates
+		ctx := sequence.With(t.Context(), replay.Flags{})
+		var calls []int
+
+		sequence.Defer(ctx, func() { calls = append(calls, 1) })
+		sequence.Defer(ctx, func() { panic("second deferred panics") })
+		sequence.Defer(ctx, func() { calls = append(calls, 3) })
+
+		assert.PanicsWithValue(t, "second deferred panics", func() { sequence.RunDeferred(ctx) })
+		assert.Equal(t, []int{3, 1}, calls)
+	})
 }

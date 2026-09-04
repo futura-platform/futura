@@ -78,8 +78,9 @@ func Defer(ctx context.Context, fn func()) {
 	s := getSequenceState(ctx)
 	lastDeferred := *s.deferred
 	*s.deferred = func() {
+		// the ones registered before run even if fn panics, the same as Go's defer
+		defer lastDeferred()
 		fn()
-		lastDeferred()
 	}
 }
 

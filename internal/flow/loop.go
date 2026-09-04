@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/futura-platform/futura/ftype"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	"github.com/futura-platform/futura/internal/flow/replay/sequence"
@@ -27,6 +28,10 @@ var (
 // - executing the flow fn
 // - handling errors
 // - rewinding the sequence
+//
+// An execution ends the same way whether it returns or panics. the panic becomes the execution's
+// error, then the last replay is cancelled, its deferred functions run, and the end hooks run
+// (each seeing that error, and each adding its own). Deferred order is the reverse of the defers below.
 func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A, opts ...ftype.FlowLoopOption) (_ T, err error) {
 	f := execution.MustFromContext(ctx)
 	for _, opt := range opts {
@@ -43,7 +48,14 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 	var replayCtx context.Context
 	defer func() {
 		if replayCtx != nil {
+			replay.Cancel(replayCtx, ErrReplayEnded)
 			sequence.RunDeferred(replayCtx)
+		}
+	}()
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = ftrerrors.PanicError(r)
 		}
 	}()
 

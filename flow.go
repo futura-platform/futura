@@ -9,6 +9,7 @@ import (
 	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/durable"
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flowhooks"
@@ -19,7 +20,9 @@ type FlowFn[A, R any] func(b FlowBuilder, args A) (R, error)
 var (
 	ErrTopLevelFlowConflict = errors.New("do not call futura.Flow from within a flow")
 	ErrAlreadyRunning       = errors.New("flow is already running")
-	ErrFlowPanic            = errors.New("flow panicked")
+	// ErrFlowPanic reports a panic anywhere in an execution: the flow fn, a step, a wrapper, a
+	// deferred function, a handle's cleanup, or an execution end hook.
+	ErrFlowPanic = ftrerrors.ErrFlowPanic
 )
 
 type Flow[A, R any] struct {
@@ -63,15 +66,10 @@ func (f *Flow[A, R]) Execute(ctx context.Context, fn FlowFn[A, R], args A, opts 
 	}
 	defer stopRun()
 
+	// the loop reports the flow's panics as errors; this is the backstop for anything that escapes it
 	defer func() {
 		if r := recover(); r != nil {
-			switch r := r.(type) {
-			case error:
-				err = fmt.Errorf("%w: %w", ErrFlowPanic, r)
-			default:
-				err = fmt.Errorf("%w: %v", ErrFlowPanic, r)
-			}
-			err = fmt.Errorf("%w\n%s", err, debug.Stack())
+			err = fmt.Errorf("%w\n%s", ftrerrors.PanicError(r), debug.Stack())
 		}
 	}()
 
