@@ -34,7 +34,8 @@ var handleSequence atomic.Int32
 // unmarshal is called to deserialize the value from the execution container.
 // marshal is called to serialize the value to the execution container, at every durable boundary. Its result is copied.
 // cleanup is called to clean up the value when the flow stops execution. It is only called if the value is not nil.
-// all four of these method MUST NOT use the handle it belongs to, it will deadlock for all but cleanup.
+// constructor, unmarshal and marshal must not call into futura: they run under the execution's locks and deadlock.
+// cleanup runs after the execution ended, and may use another handle.
 func NewDurableHandle[T any](
 	key string,
 	constructor func() *T,
