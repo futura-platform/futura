@@ -186,6 +186,15 @@ func TestFlow(t *testing.T) {
 		assert.Contains(t, err.Error(), "index out of range")
 		assert.Contains(t, err.Error(), "flow_test.go", "the panic's stack is attached")
 	})
+	t.Run("a panic in a step does not hide the failure of its boundary", func(t *testing.T) {
+		c := &failingContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failAt: 2} // the step's boundary
+		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewStrict(c)).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
+			return futura.Source(b, func(ctx context.Context) (string, error) { panic("boom") })
+		}, nil)
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		assert.ErrorContains(t, err, "boom")
+		assert.ErrorIs(t, err, errCommitFailed)
+	})
 	t.Run("Flow recovers from panics with non-error values", func(t *testing.T) {
 		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
 			panic("not an error type")

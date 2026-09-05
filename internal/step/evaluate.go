@@ -146,17 +146,27 @@ func evaluateWithCallstack[A comparable, R any](
 	defer func() {
 		// a step that may still be running could still have writers running,
 		// so we should check here before recording to make sure we don't commit inconsistent state
-		if r := recover(); r != nil {
-			if rerr, ok := r.(error); ok && errors.Is(rerr, ErrStillRunning) {
-				panic(r)
-			}
-			defer panic(r)
+		r := recover()
+		if rerr, ok := r.(error); ok && errors.Is(rerr, ErrStillRunning) {
+			panic(r)
 		}
 		if err != nil {
 			currentMoment.Invalidate()
 		}
 		// handle the result of the step, if it was successful
-		f.RecordCurrentMoment(ctx, identity, *currentMoment)
+		if recordErr := ftrerrors.Recovering(func() error {
+			f.RecordCurrentMoment(ctx, identity, *currentMoment)
+			return nil
+		}); recordErr != nil {
+			// do a best effort to join the record error with the step's panic, if any
+			if _, terminated := AsReplayTerminated(r); r == nil || terminated {
+				panic(recordErr)
+			}
+			panic(fmt.Errorf("%w: %w", ftrerrors.PanicError(r), recordErr))
+		}
+		if r != nil {
+			panic(r)
+		}
 		if err != nil {
 			return
 		}

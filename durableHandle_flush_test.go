@@ -154,6 +154,7 @@ func TestDurableHandle_ChangesAreCommittedWithTheStepsMemo(t *testing.T) {
 				c := &failingContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failAt: failAt}
 				_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
 				if err != nil {
+					assert.ErrorIs(t, err, errCommitFailed, "a boundary that fails is reported, whatever ended the step")
 					return
 				}
 				// the execution reported success, so a fresh one over the container must see the change

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
 	"github.com/futura-platform/futura/internal/flow/replay"
@@ -234,11 +235,16 @@ func TestStep(t *testing.T) {
 	t.Run("panics if evaluated from inside another step", func(t *testing.T) {
 		// A step's fn receives a flow context, so a nested Step would evaluate at the outer step's
 		// index and record ahead of it, leaving a call order that no later replay can follow.
-		innerRan, outerRecorded := false, false
-		_, err := replay.Execute(runningFlowCtx(t), func(ctx context.Context, args any) (any, error) {
-			f := execution.MustFromContext(ctx)
-			ctx, _ = f.StartNewReplay(ctx)
-
+		innerRan := false
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
+		stop, ok := exec.TryStartRun()
+		if !ok {
+			t.Fatalf("flow execution is already running")
+		}
+		t.Cleanup(stop)
+		_, err := replay.Execute(execution.WithFlow(t.Context(), exec), func(ctx context.Context, args any) (any, error) {
+			ctx, _ = exec.StartNewReplay(ctx)
 			testutil.PanicsWithErrorIs(t, ErrNestedStep, func() {
 				Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
 					Evaluate(ctx, moment.NewFn(func(ctx context.Context, _ struct{}) (string, error) {
@@ -248,12 +254,11 @@ func TestStep(t *testing.T) {
 					return "", nil
 				}), struct{}{})
 			})
-			_, outerRecorded = f.ExpectedIdentity(ctx)
 			return "success", nil
 		}, nil)
 		assert.NoError(t, err)
 		assert.False(t, innerRan)
-		assert.False(t, outerRecorded, "nothing may be recorded for a step that panicked")
+		assert.Equal(t, 1, c.CallOrderLength(), "only the outer step's slot is recorded")
 	})
 
 	t.Run("terminates without executing if the replay is cancelled", func(t *testing.T) {
