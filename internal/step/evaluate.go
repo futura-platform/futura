@@ -66,11 +66,10 @@ func evaluateWithCallstack[A comparable, R any](
 	}
 	// if the replay is cancelled, terminate it immediately
 	terminateIfReplayCancelled(ctx)
-	// a step is a leaf of the flow: evaluated from inside another step, it would record at that step's index
-	if moment.IsEvaluating(ctx) {
+
+	if sequence.IsEvaluating(ctx) {
 		panic(ftrerrors.InconsistentStateError(ErrNestedStep))
 	}
-	// a failed step ends the replay: its error is not memoized, so a branch taken on it cannot be replayed
 	if sequence.HasFailed(ctx) {
 		panic(ftrerrors.InconsistentStateError(ErrStepAfterFailure))
 	}
@@ -165,6 +164,8 @@ func evaluateWithCallstack[A comparable, R any](
 	}()
 	// validate it. If it no longer valid, re execute it and update the cache
 	if needsExecution {
+		done := sequence.MarkEvaluating(ctx)
+		defer done()
 		output, err = call(ctx, fn, identity, args, callstack)
 		if err != nil {
 			return

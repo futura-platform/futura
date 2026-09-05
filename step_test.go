@@ -3,10 +3,13 @@ package futura_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/fopt"
+	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/step"
@@ -127,25 +130,62 @@ func TestStep(t *testing.T) {
 		})
 	})
 	t.Run("a step evaluated from inside another step is rejected", func(t *testing.T) {
-		c := executiontype.NewInMemoryContainer()
-		nest := true
-		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
-			return futura.Step(b, func(ctx context.Context, _ struct{}) (int, error) {
-				if nest {
-					return futura.Step(b.WithContext(ctx), func(ctx context.Context, _ struct{}) (int, error) { return 0, nil }, struct{}{})
+		// whichever context the inner step is reached through: it would record at the outer step's index
+		inner := func(ctx context.Context, _ struct{}) (int, error) { return 0, nil }
+		for name, nested := range map[string]func(b futura.FlowBuilder, ctx context.Context) (int, error){
+			"through the step's context": func(b futura.FlowBuilder, ctx context.Context) (int, error) {
+				return futura.Step(b.WithContext(ctx), inner, struct{}{})
+			},
+			"through the enclosing builder": func(b futura.FlowBuilder, _ context.Context) (int, error) { return futura.Step(b, inner, struct{}{}) },
+		} {
+			t.Run(name, func(t *testing.T) {
+				c := executiontype.NewInMemoryContainer()
+				nest := true
+				flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+					return futura.Step(b, func(ctx context.Context, _ struct{}) (int, error) {
+						if nest {
+							return nested(b, ctx)
+						}
+						return 1, nil
+					}, struct{}{})
 				}
-				return 1, nil
-			}, struct{}{})
-		}
-		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
-		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
-		assert.ErrorIs(t, err, step.ErrNestedStep)
+				_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+				assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+				assert.ErrorIs(t, err, step.ErrNestedStep)
 
-		// only the outer step's slot was recorded, so a corrected flow resumes cleanly over it
-		nest = false
-		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
-		assert.NoError(t, err)
-		assert.Equal(t, 1, r)
+				// only the outer step's slot was recorded, so a corrected flow resumes cleanly over it
+				nest = false
+				r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+				assert.NoError(t, err)
+				assert.Equal(t, 1, r)
+			})
+		}
+		t.Run("from a step wrapper", func(t *testing.T) {
+			c := executiontype.NewInMemoryContainer()
+			nest := true
+			var flowB futura.FlowBuilder
+			flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+				flowB = b
+				return futura.Step(b, func(ctx context.Context, _ struct{}) (int, error) { return 1, nil }, struct{}{}, ftype.WithLabel("outer"))
+			}
+			wrapper := fopt.WithStepWrapper(func(ctx context.Context, label string, _ any, _ []runtime.Frame, call func() (any, error)) error {
+				if nest && label == "outer" {
+					if err := futura.Action(flowB.WithContext(ctx), func(ctx context.Context) error { return nil }); err != nil {
+						return err
+					}
+				}
+				_, err := call()
+				return err
+			})
+			_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{}, wrapper)
+			assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+			assert.ErrorIs(t, err, step.ErrNestedStep)
+
+			nest = false
+			r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{}, wrapper)
+			assert.NoError(t, err)
+			assert.Equal(t, 1, r)
+		})
 	})
 	t.Run("a step reached twice in one replay is rejected before it runs", func(t *testing.T) {
 		var sent []int

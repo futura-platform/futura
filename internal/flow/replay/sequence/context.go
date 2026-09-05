@@ -19,6 +19,8 @@ type state struct {
 	index    int
 	seen     mapset.Set[moment.Identity]
 	deferred *func() error
+	// evaluating is set while a step of this replay runs its fn. A step is a leaf: none may evaluate until it returns.
+	evaluating bool
 	// failed is set once a step in this replay has not completed. Nothing after it may evaluate.
 	failed bool
 }
@@ -48,6 +50,18 @@ func GetIndex(ctx context.Context) int {
 func Advance(ctx context.Context) {
 	s := getSequenceState(ctx)
 	s.index++
+}
+
+// MarkEvaluating records that a step of this replay is running its fn, and returns the func that records it returned.
+func MarkEvaluating(ctx context.Context) (done func()) {
+	s := getSequenceState(ctx)
+	s.evaluating = true
+	return func() { s.evaluating = false }
+}
+
+// IsEvaluating reports whether a step of this replay is running its fn.
+func IsEvaluating(ctx context.Context) bool {
+	return getSequenceState(ctx).evaluating
 }
 
 // MarkFailed records that a step in this replay did not complete.

@@ -9,20 +9,20 @@ from it. It must never reach for a context from an enclosing scope.
 
 ```go
 futura.Step(b, func(ctx context.Context, _ struct{}) (int, error) {
-    return futura.Step(b, ...)       // no: b is the enclosing flow's builder
-    return futura.Step(b.WithContext(ctx), ...) // also no, but for the nesting rule below
+    return futura.Step(b, ...)       // no: b is the enclosing flow's builder (and a nested step, see below)
+    return futura.Step(b.WithContext(ctx), ...) // also no, for the nesting rule below
     return doWork(b, ...)            // no: b again
     return doWork(ctx, ...)          // yes
 }, ...)
 ```
 
 Why: the enclosing builder carries the replay's sequence state and goroutine binding. Using it from
-inside a step lets the step act as if it were the flow, which is how a nested step ends up recording
-at its parent's index. The runtime now rejects the nested-step case specifically (`step.ErrNestedStep`),
-but it cannot see a step handing the parent builder to a helper that does not evaluate a step, and it
-cannot distinguish a step that uses the parent context for cancellation from one that uses it for
-identity. The linter can: flag any reference to a `FlowBuilder` or flow `context.Context` from an
-enclosing scope inside a function literal passed as a moment fn.
+inside a step lets the step act as if it were the flow, which is how a nested step would end up
+recording at its parent's index. The runtime rejects a nested step through any context of the replay
+(`step.ErrNestedStep`), but it cannot see a step handing the parent builder to a helper that does not
+evaluate a step, and it cannot distinguish a step that uses the parent context for cancellation from
+one that uses it for identity. The linter can: flag any reference to a `FlowBuilder` or flow
+`context.Context` from an enclosing scope inside a function literal passed as a moment fn.
 
 ## Steps are leaves
 
