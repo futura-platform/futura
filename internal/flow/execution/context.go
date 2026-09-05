@@ -39,8 +39,8 @@ type FlowExecution struct {
 	// to Transact / ReadTransact, as those hold mu.Lock / mu.RLock respectively
 	// and sync.RWMutex is not reentrant.
 	running bool
-	// dirty holds the durable values written behind, until the next replay flushes them. Protected by mu.
-	dirty map[string][]byte
+	// dirtyState holds the state values written behind, until the next replay flushes them. Protected by mu.
+	dirtyState map[string][]byte
 	// handles is the run's cache of resolved handles. Their changes are flushed at every durable
 	// boundary, in that boundary's transaction. Replaced by TryStartRun; protected by mu.
 	handles *durable.Handles
@@ -147,7 +147,7 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 
 	changedHandles := f.handles.Flush()
 	// The transaction may be retried by the container, so it only reads and writes durable state.
-	// In-memory state (the dirty map) is consumed after it commits.
+	// In-memory state (the dirty state) is consumed after it commits.
 	var flags replay.Flags
 	var dirtyEpoch uint64
 	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
@@ -157,7 +157,7 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 			PanicOnMomentOrderChange: dirtyEpoch <= f.getEpoch(tx, evaluatedEpochKey),
 		}
 	})
-	f.dirty = nil
+	f.dirtyState = nil
 	f.handles.OnCommitted(changedHandles)
 
 	return sequence.With(replayCtx, flags), dirtyEpoch
@@ -170,23 +170,19 @@ func (f *FlowExecution) Handles() *durable.Handles {
 	return f.handles
 }
 
-// flushDirty writes every value written behind, and the handle values that changed since the last
-// boundary, into tx, and it bumps the dirty epoch (if something was written).
+// flushDirty writes the dirty state and the changed handle values into tx. Only the dirty state is a
+// control-flow invalidation, so only it bumps the dirty epoch.
 func (f *FlowExecution) flushDirty(tx executiontype.Container, changedHandles map[string][]byte) uint64 {
 	dirtyEpoch := f.getEpoch(tx, dirtyEpochKey)
-	if len(f.dirty) == 0 && len(changedHandles) == 0 {
-		return dirtyEpoch
+	if len(f.dirtyState) > 0 {
+		dirtyEpoch++
+		f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
 	}
-	dirtyEpoch++
-	f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
-	for key, value := range f.dirty {
-		if err := tx.StoreDurable(GenericDurableKey(key), value); err != nil {
-			panic(err)
-		}
-	}
-	for key, value := range changedHandles {
-		if err := tx.StoreDurable(GenericDurableKey(key), value); err != nil {
-			panic(err)
+	for _, values := range []map[string][]byte{f.dirtyState, changedHandles} {
+		for key, value := range values {
+			if err := tx.StoreDurable(GenericDurableKey(key), value); err != nil {
+				panic(err)
+			}
 		}
 	}
 	return dirtyEpoch
@@ -223,7 +219,7 @@ func namespacedDurableKeyConstructor(namespace string) func(key string) string {
 
 var ErrWrittenBehind = errors.New("a durable value was written behind")
 
-// WriteBehind writes a durable value that the control flow depends on.
+// WriteBehind writes a state value that the control flow depends on.
 // The value is visible to ReadBehind immediately, and is flushed to the container, together with a bump of the
 // dirty epoch, at the start of the next replay. The current replay is restarted, since the sequence it was
 // evaluated against may no longer hold.
@@ -231,10 +227,10 @@ func (f *FlowExecution) WriteBehind(ctx context.Context, durableKey string, valu
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.restartCurrentReplay(ctx, ErrWrittenBehind)
-	if f.dirty == nil {
-		f.dirty = map[string][]byte{}
+	if f.dirtyState == nil {
+		f.dirtyState = map[string][]byte{}
 	}
-	f.dirty[durableKey] = value
+	f.dirtyState[durableKey] = value
 }
 
 // ReadBehind returns the value under durableKey, including one that was written behind and not yet flushed.
@@ -245,7 +241,7 @@ func (f *FlowExecution) ReadBehind(ctx context.Context, durableKey string) ([]by
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
-		if state, ok = f.dirty[durableKey]; ok {
+		if state, ok = f.dirtyState[durableKey]; ok {
 			return
 		}
 		state, ok, err = loadDurable(tx, durableKey)
@@ -319,7 +315,7 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 		tx.SetMoment(identity, currentMoment)
 		f.flushDirty(tx, changedHandles)
 	})
-	f.dirty = nil
+	f.dirtyState = nil
 	f.handles.OnCommitted(changedHandles)
 	sequence.MarkSeen(ctx, identity)
 }

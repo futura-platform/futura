@@ -12,6 +12,7 @@ import (
 	"github.com/futura-platform/futura/ftype/executiontype"
 	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
+	"github.com/futura-platform/futura/internal/step"
 	"github.com/futura-platform/futura/internal/utils/containertest"
 	"github.com/stretchr/testify/assert"
 )
@@ -238,6 +239,27 @@ func TestDurableHandle_ChangesAreCommittedWithTheStepsMemo(t *testing.T) {
 		}, struct{}{}, fopt.WithMaxFailures(2))
 		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorIs(t, err, marshalErr)
+	})
+	t.Run("a change does not relax the strictness of the next replay", func(t *testing.T) {
+		h := futura.NewPlainDurableHandle("flush-strict", func() *int { v := 0; return &v })
+		fnA := func(ctx context.Context, _ *any) (string, error) { return "A", nil }
+		fnB := func(ctx context.Context, _ *any) (string, error) { return "B", nil }
+		body := func(fn futura.ComparableMomentFn[*any, string]) func(futura.FlowBuilder, *any) (string, error) {
+			return func(b futura.FlowBuilder, _ *any) (string, error) {
+				b = h.Provide(b)
+				if err := futura.Action(b, func(ctx context.Context) error { *h.Use(ctx)++; return nil }); err != nil {
+					return "", err
+				}
+				return futura.Step(b, fn, nil)
+			}
+		}
+		f := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory())
+		r, err := f.Execute(t.Context(), body(fnA), nil)
+		assert.NoError(t, err)
+		assert.Equal(t, "A", r)
+
+		_, err = f.Execute(t.Context(), body(fnB), nil)
+		assert.ErrorIs(t, err, step.ErrUnexpectedBranchTaken)
 	})
 	t.Run("an unchanged value is not stored again at every boundary", func(t *testing.T) {
 		h := futura.NewPlainDurableHandle("flush-unchanged", func() *int { v := 0; return &v })
