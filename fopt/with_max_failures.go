@@ -13,7 +13,7 @@ import (
 
 var ErrMaxFailuresReached = errors.New("max failures exceeded")
 
-var failureCountHandle = futura.NewPlainDurableHandle("failureCount", func() *atomic.Int32 { return new(atomic.Int32) })
+var failureCountHandle = futura.NewPlainDurableHandle("futura.failureCount", func() *atomic.Int32 { return new(atomic.Int32) })
 
 func WithMaxFailures(maxFailures int32) ftype.FlowLoopOption {
 	return func(ctx context.Context) context.Context {
