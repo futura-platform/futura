@@ -18,11 +18,3 @@ import (
 func WithOnExecutionEnd(onEnd func(ctx context.Context, err error) error) ftype.FlowLoopOption {
 	return flowhooks.WithOnExecutionEnd(onEnd)
 }
-
-// RunOnExecutionEnd executes callbacks registered by WithOnExecutionEnd, returning
-// any errors they produced (joined).
-//
-// Callbacks are invoked in reverse order of registration (LIFO).
-func RunOnExecutionEnd(ctx context.Context, executionErr error) error {
-	return flowhooks.RunOnExecutionEnd(ctx, executionErr)
-}
