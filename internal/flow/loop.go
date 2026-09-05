@@ -68,12 +68,12 @@ func Loop[A, T any](ctx context.Context, callableFlow CallableFlow[A, T], args A
 		replay.Cancel(replayCtx, ErrReplayEnded)
 
 		switch {
+		case errors.Is(err, ftype.ErrCancelFlow):
+			// the flow ended for good: its verdict is reported even if the context died on the same replay
+			return result, err
 		case ctx.Err() != nil:
 			// if the context is done, comply by returning immediately
 			return result, ctx.Err()
-		case errors.Is(err, ftype.ErrCancelFlow):
-			// special case to immedieately return the error from the loop.
-			return result, err
 		case errors.Is(context.Cause(replayCtx), execution.ErrRestartReplay):
 			// special case to always restart the replay, even if otherwise the result, err combo would be terminal
 			// if the replay was restarted, the sequence has NOT been settled, so we need to skip the settle step.

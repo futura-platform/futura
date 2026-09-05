@@ -201,10 +201,10 @@ func (f *FlowExecution) SettleSequence(ctx context.Context, atIndex int, toEpoch
 		if stored > toEpoch {
 			panic(ftrerrors.InconsistentStateError(fmt.Errorf("%w: stored %d, settling to %d", ErrEpochRegression, stored, toEpoch)))
 		}
-		tx.TruncateCallOrderAt(atIndex)
-		if length := tx.CallOrderLength(); length != atIndex+1 {
+		if length := tx.CallOrderLength(); length < atIndex+1 {
 			panic(ftrerrors.InconsistentStateError(fmt.Errorf("%w: the call order has %d entries, but the replay recorded %d", ErrSettledSequenceMismatch, length, atIndex+1)))
 		}
+		tx.TruncateCallOrderAt(atIndex)
 		if stored != toEpoch {
 			f.setEpoch(tx, evaluatedEpochKey, toEpoch)
 		}

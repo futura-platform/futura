@@ -438,6 +438,16 @@ func TestLoopFlow(t *testing.T) {
 		assert.Equal(t, 1, c.CallOrderLength())
 	})
 
+	t.Run("a flow that cancels itself reports that, even if the context died on the same replay", func(t *testing.T) {
+		outerCtx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		ctx := execution.WithFlow(outerCtx, execution.NewFlowExecutionWithContainer(containertest.NewInMemory()))
+		_, err := loopAndAssertState(t, ctx, func(ctx context.Context, _ struct{}) (string, error) {
+			cancel()
+			return "", ftype.ErrCancelFlow
+		}, struct{}{})
+		assert.ErrorIs(t, err, ftype.ErrCancelFlow)
+	})
 	t.Run("terminal exits do not settle the sequence", func(t *testing.T) {
 		assertDoesNotSettle := func(t *testing.T, expectedErr error, exit func(ctx context.Context, cancel context.CancelFunc) error) {
 			t.Helper()

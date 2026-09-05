@@ -3,11 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
-	"net/url"
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/privateencoding"
@@ -40,14 +38,8 @@ var serpMonitorCookieJarHandle = futura.NewDurableHandle[cookiejar.Jar](
 )
 
 var serpMonitorHTTPTransport = &http.Transport{
-	// proxying through a local MITM for debugging
-	Proxy: http.ProxyURL(&url.URL{
-		Scheme: "http",
-		Host:   "127.0.0.1:8888",
-	}),
-	TLSClientConfig: &tls.Config{
-		InsecureSkipVerify: true,
-	},
+	// set HTTPS_PROXY to route through a local MITM for debugging
+	Proxy: http.ProxyFromEnvironment,
 }
 
 // withHttpClient provides the durable cookie jar resolver to the flow.

@@ -17,6 +17,7 @@ import (
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/utils/containertest"
+	"github.com/futura-platform/futura/moment"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -41,6 +42,9 @@ func (c *crashingContainer) Transact(ctx context.Context, fn func(ctx context.Co
 		if err := fn(ctx, buffered); err != nil {
 			return err
 		}
+		for _, write := range buffered.writes {
+			write()
+		}
 		for key, value := range buffered.durable {
 			if err := tx.StoreDurable(key, value); err != nil {
 				return err
@@ -62,6 +66,28 @@ type crashingTx struct {
 	executiontype.Container
 	c       *crashingContainer
 	durable map[string][]byte
+	// writes are the call-order and memo writes, applied in order once the transaction returns
+	writes []func()
+}
+
+func (tx *crashingTx) SetCallOrderAt(index int, identity moment.Identity) {
+	tx.writes = append(tx.writes, func() { tx.Container.SetCallOrderAt(index, identity) })
+}
+
+func (tx *crashingTx) AppendCallOrder(identity moment.Identity) {
+	tx.writes = append(tx.writes, func() { tx.Container.AppendCallOrder(identity) })
+}
+
+func (tx *crashingTx) TruncateCallOrderAt(index int) {
+	tx.writes = append(tx.writes, func() { tx.Container.TruncateCallOrderAt(index) })
+}
+
+func (tx *crashingTx) SetMoment(identity moment.Identity, m moment.Moment) {
+	tx.writes = append(tx.writes, func() { tx.Container.SetMoment(identity, m) })
+}
+
+func (tx *crashingTx) DeleteMoment(identity moment.Identity) {
+	tx.writes = append(tx.writes, func() { tx.Container.DeleteMoment(identity) })
 }
 
 func (tx *crashingTx) LoadDurable(key string) ([]byte, bool, error) {
@@ -405,6 +431,21 @@ func TestState(t *testing.T) {
 		}, struct{}{})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
+	})
+	t.Run("the crash harness commits a transaction whole or not at all", func(t *testing.T) {
+		// a step's memo and the state it Set travel in one transaction: a crash on the durable write
+		// must not leave the memo behind
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			s := futura.State(b, 0)
+			if err := futura.Action(b, func(ctx context.Context) error { s.Set(7); return nil }); err != nil {
+				return 0, err
+			}
+			return s.V(), nil
+		}
+		c := &crashingContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), crashAt: 1}
+		executeUntilCrash(t, c, flowFn)
+		// the state's key step is committed on its own; the step that Set is in the crashed transaction
+		assert.Equal(t, 1, c.CallOrderLength(), "the memo landed although its transaction crashed")
 	})
 	t.Run("consecutive state changes in one replay are committed atomically", func(t *testing.T) {
 		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {

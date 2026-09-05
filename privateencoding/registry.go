@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -96,8 +97,51 @@ func typeRegistrationName(rt reflect.Type) string {
 		return "map[" + typeRegistrationName(rt.Key()) + "]" + typeRegistrationName(rt.Elem())
 	case reflect.Chan:
 		return "chan " + typeRegistrationName(rt.Elem())
+	case reflect.Struct:
+		var b strings.Builder
+		b.WriteString("struct {")
+		for i := range rt.NumField() {
+			f := rt.Field(i)
+			if i > 0 {
+				b.WriteString(";")
+			}
+			b.WriteString(" " + f.Name + " " + typeRegistrationName(f.Type))
+			if f.Tag != "" {
+				b.WriteString(" " + strconv.Quote(string(f.Tag)))
+			}
+		}
+		b.WriteString(" }")
+		return b.String()
+	case reflect.Func:
+		var b strings.Builder
+		b.WriteString("func(")
+		for i := range rt.NumIn() {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(typeRegistrationName(rt.In(i)))
+		}
+		b.WriteString(")")
+		for i := range rt.NumOut() {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(" " + typeRegistrationName(rt.Out(i)))
+		}
+		return b.String()
+	case reflect.Interface:
+		var b strings.Builder
+		b.WriteString("interface {")
+		for i := range rt.NumMethod() {
+			m := rt.Method(i)
+			if i > 0 {
+				b.WriteString(";")
+			}
+			b.WriteString(" " + m.Name + strings.TrimPrefix(typeRegistrationName(m.Type), "func"))
+		}
+		b.WriteString(" }")
+		return b.String()
 	default:
-		// structs, funcs, and interfaces are spelled by reflect; their element types are not qualified
 		return rt.String()
 	}
 }

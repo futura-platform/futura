@@ -2,7 +2,9 @@ package replay
 
 import "context"
 
-const replayKey = "replay"
+type replayKeyType struct{}
+
+var replayKey = replayKeyType{}
 
 type replayContext struct {
 	context.Context

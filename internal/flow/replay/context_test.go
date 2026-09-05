@@ -15,6 +15,11 @@ func TestContext(t *testing.T) {
 		ctx, _ = replay.With(ctx)
 		assert.True(t, replay.Has(ctx))
 	})
+	t.Run("a value the flow stores under the string \"replay\" does not shadow the replay", func(t *testing.T) {
+		ctx, _ := replay.With(context.Background())
+		ctx = context.WithValue(ctx, "replay", "the flow's own value") //nolint:staticcheck // the collision is the point
+		assert.True(t, replay.Has(ctx))
+	})
 	t.Run("Cancel", func(t *testing.T) {
 		t.Run("success", func(t *testing.T) {
 			ctx := context.Background()

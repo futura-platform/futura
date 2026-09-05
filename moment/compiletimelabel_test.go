@@ -45,4 +45,17 @@ func TestFnCompileTimeLabel(t *testing.T) {
 		label := CompileTimeLabel(runtimeFunc(labelToInfer3[int, string]))
 		assert.Equal(t, "labelToInfer3", label)
 	})
+
+	t.Run("a method value on an anonymous interface", func(t *testing.T) {
+		// the runtime spells the interface in the name, with brackets before the package path
+		var i interface {
+			Do(context.Context, []map[string]int) (string, error)
+		} = anonInterfaceImpl{}
+		label := CompileTimeLabel(runtimeFunc(i.Do))
+		assert.Equal(t, "Do-fm", label)
+	})
 }
+
+type anonInterfaceImpl struct{}
+
+func (anonInterfaceImpl) Do(context.Context, []map[string]int) (string, error) { return "", nil }

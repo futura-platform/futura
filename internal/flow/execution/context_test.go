@@ -553,6 +553,16 @@ func TestSettleSequence(t *testing.T) {
 			f.SettleSequence(ctx, -1, 1)
 		})
 	})
+	t.Run("does not read what it wrote in the same transaction", func(t *testing.T) {
+		// a container may apply a transaction's writes when it commits, so a read inside it sees the state before
+		c := executiontype.NewInMemoryContainer()
+		for range 3 {
+			c.AppendCallOrder(moment.Identity{})
+		}
+		f := NewFlowExecutionWithContainer(containertest.NewStrict(&applyOnCommit{InMemoryContainer: c}))
+		f.SettleSequence(t.Context(), 1, 1)
+		assert.Equal(t, 2, c.CallOrderLength())
+	})
 	t.Run("panics if the call order does not end where the replay stopped", func(t *testing.T) {
 		c := executiontype.NewInMemoryContainer()
 		f := NewFlowExecutionWithContainer(containertest.NewStrict(c))
@@ -642,4 +652,32 @@ func TestDurableReadsOutliveTheirTransaction(t *testing.T) {
 	value, ok = f.ReadBehind(ctx, "key")
 	assert.True(t, ok)
 	assert.Equal(t, []byte("value"), value)
+}
+
+// applyOnCommit queues a transaction's call-order writes and applies them once it returns, so reads
+// inside the transaction see the state before it.
+type applyOnCommit struct {
+	*executiontype.InMemoryContainer
+}
+
+type queuedTx struct {
+	executiontype.Container
+	queued []func()
+}
+
+func (tx *queuedTx) TruncateCallOrderAt(index int) {
+	tx.queued = append(tx.queued, func() { tx.Container.TruncateCallOrderAt(index) })
+}
+
+func (c *applyOnCommit) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
+	return c.InMemoryContainer.Transact(ctx, func(ctx context.Context, tx executiontype.Container) error {
+		queued := &queuedTx{Container: tx}
+		if err := fn(ctx, queued); err != nil {
+			return err
+		}
+		for _, apply := range queued.queued {
+			apply()
+		}
+		return nil
+	})
 }

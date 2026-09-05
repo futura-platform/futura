@@ -1,8 +1,10 @@
 package privateencoding
 
 import (
+	htmltemplate "html/template"
 	"reflect"
 	"testing"
+	texttemplate "text/template"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -27,6 +29,15 @@ func TestTypeRegistrationName(t *testing.T) {
 	t.Run("unnamed_type_uses_string_form", func(t *testing.T) {
 		rt := reflect.TypeOf(struct{ Value int }{})
 		assert.Equal(t, rt.String(), typeRegistrationName(rt))
+	})
+
+	t.Run("an unnamed struct qualifies its fields", func(t *testing.T) {
+		// reflect spells a field's type with its short package name, so two packages named template
+		// would collide
+		text := reflect.TypeOf(struct{ T *texttemplate.Template }{})
+		html := reflect.TypeOf(struct{ T *htmltemplate.Template }{})
+		assert.Equal(t, text.String(), html.String())
+		assert.NotEqual(t, typeRegistrationName(text), typeRegistrationName(html))
 	})
 }
 
