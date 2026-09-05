@@ -153,7 +153,7 @@ func TestBindToGoroutine(t *testing.T) {
 		recovering := fopt.WithStepWrapper(func(ctx context.Context, fnLabel string, _ any, _ []runtime.Frame, call func() (any, error)) (errOverride error) {
 			defer func() {
 				if r := recover(); r != nil {
-					errOverride = fmt.Errorf("step %s panicked: %v", fnLabel, r)
+					errOverride = fmt.Errorf("step %s panicked: %w", fnLabel, ftrerrors.PanicError(r))
 				}
 			}()
 			_, err := call()

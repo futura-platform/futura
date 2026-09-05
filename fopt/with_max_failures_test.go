@@ -106,7 +106,7 @@ func TestWithMaxFailures(t *testing.T) {
 		annotating := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
 			defer func() {
 				if r := recover(); r != nil {
-					errOverride = fmt.Errorf("step %s panicked: %v", fnLabel, r)
+					errOverride = fmt.Errorf("step %s panicked: %w", fnLabel, ftrerrors.PanicError(r))
 				}
 			}()
 			_, err := call()
@@ -129,7 +129,7 @@ func TestWithMaxFailures(t *testing.T) {
 		annotating := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
 			defer func() {
 				if r := recover(); r != nil {
-					errOverride = fmt.Errorf("step %s panicked: %v", fnLabel, r)
+					errOverride = fmt.Errorf("step %s panicked: %w", fnLabel, ftrerrors.PanicError(r))
 				}
 			}()
 			_, err := call()
