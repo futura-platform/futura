@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"testing"
@@ -597,4 +598,48 @@ func TestNewFlowExecutionFromState(t *testing.T) {
 	f := NewFlowExecutionWithContainer(c)
 	assert.NotNil(t, f)
 	assert.Equal(t, c, f.c)
+}
+
+// recyclingContainer hands out bytes that it overwrites once the read transaction ends, like a page-backed store.
+type recyclingContainer struct {
+	*executiontype.InMemoryContainer
+}
+
+type recyclingTx struct {
+	executiontype.ReadOnlyContainer
+	handedOut [][]byte
+}
+
+func (tx *recyclingTx) LoadDurable(key string) ([]byte, bool, error) {
+	value, ok, err := tx.ReadOnlyContainer.LoadDurable(key)
+	page := bytes.Clone(value)
+	tx.handedOut = append(tx.handedOut, page)
+	return page, ok, err
+}
+
+func (c *recyclingContainer) ReadTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.ReadOnlyContainer) error) error {
+	return c.InMemoryContainer.ReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error {
+		recycling := &recyclingTx{ReadOnlyContainer: tx}
+		defer func() {
+			for _, page := range recycling.handedOut {
+				clear(page)
+			}
+		}()
+		return fn(ctx, recycling)
+	})
+}
+
+func TestDurableReadsOutliveTheirTransaction(t *testing.T) {
+	c := &recyclingContainer{InMemoryContainer: executiontype.NewInMemoryContainer()}
+	assert.NoError(t, c.StoreDurable(GenericDurableKey("key"), []byte("value")))
+	f := running(t, NewFlowExecutionWithContainer(containertest.NewStrict(c)))
+	ctx := WithFlow(t.Context(), f)
+
+	value, ok := f.LoadDurable(ctx, "key")
+	assert.True(t, ok)
+	assert.Equal(t, []byte("value"), value)
+
+	value, ok = f.ReadBehind(ctx, "key")
+	assert.True(t, ok)
+	assert.Equal(t, []byte("value"), value)
 }

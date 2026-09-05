@@ -50,6 +50,21 @@ func (c *storeCountingContainer) ReadTransact(ctx context.Context, fn func(ctx c
 	return fn(ctx, c.inner)
 }
 
+var errRejected = errors.New("rejected")
+
+// rejectingContainer rejects write transactions while reject is set, the way a backend does on a transient error.
+type rejectingContainer struct {
+	*executiontype.InMemoryContainer
+	reject bool
+}
+
+func (c *rejectingContainer) Transact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) error {
+	if c.reject {
+		return errRejected
+	}
+	return c.InMemoryContainer.Transact(ctx, fn)
+}
+
 func newDurableTestBuilder(t *testing.T, exec *execution.FlowExecution, providers ...func(FlowBuilder) FlowBuilder) FlowBuilder {
 	t.Helper()
 	startExecRun(t, exec)
@@ -354,6 +369,32 @@ func TestDurableHandle(t *testing.T) {
 		testutil.PanicsWithErrorIs(t, expectedErr, func() { errHandle.Use(b) })
 		assert.Equal(t, 0, constructorCalls)
 		assert.Equal(t, 1, unmarshalCalls)
+	})
+
+	t.Run("a load that fails is retried by the next use", func(t *testing.T) {
+		expectedErr := errors.New("unmarshal failed")
+		unmarshalCalls := 0
+		h := NewDurableHandle[byte]("retriedLoadHandle",
+			func() *byte { v := byte(1); return &v },
+			func(input []byte) (*byte, error) {
+				unmarshalCalls++
+				if unmarshalCalls == 1 {
+					return nil, expectedErr
+				}
+				v := input[0]
+				return &v, nil
+			},
+			func(v *byte) ([]byte, error) { return []byte{*v}, nil },
+			nil,
+		)
+		c := executiontype.NewInMemoryContainer()
+		assert.NoError(t, c.StoreDurable(execution.GenericDurableKey("retriedLoadHandle"), []byte{42}))
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		testutil.PanicsWithErrorIs(t, expectedErr, func() { h.Use(b) })
+		assert.Equal(t, byte(42), *h.Use(b))
+		assert.Equal(t, 2, unmarshalCalls)
 	})
 
 	t.Run("panics if marshal returns an error", func(t *testing.T) {
@@ -732,6 +773,86 @@ func TestDurableHandle_Boundary(t *testing.T) {
 		assert.NoError(t, err)
 		return value, ok
 	}
+
+	t.Run("a change whose boundary fails to commit is committed by the next boundary", func(t *testing.T) {
+		h := newByteHandle("boundaryFailingHandle")
+		c := &rejectingContainer{InMemoryContainer: executiontype.NewInMemoryContainer()}
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref := h.Use(b)
+		*ref = byte(5)
+		c.reject = true
+		testutil.PanicsWithErrorIs(t, execution.ErrTransactionFailed, func() { boundary(exec, b) })
+		_, ok := storedValue(t, c.InMemoryContainer, h)
+		assert.False(t, ok)
+
+		c.reject = false
+		boundary(exec, b)
+		value, ok := storedValue(t, c.InMemoryContainer, h)
+		assert.True(t, ok)
+		assert.Equal(t, []byte{byte(5)}, value)
+	})
+
+	t.Run("an empty value is stored the first time", func(t *testing.T) {
+		h := NewDurableHandle[[]string]("boundaryEmptyHandle",
+			func() *[]string { v := []string{"default"}; return &v },
+			func(input []byte) (*[]string, error) { v := strings.Split(string(input), ","); return &v, nil },
+			func(v *[]string) ([]byte, error) { return []byte(strings.Join(*v, ",")), nil },
+			nil,
+		)
+		c := executiontype.NewInMemoryContainer()
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(c))
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		*h.Use(b) = nil
+		boundary(exec, b)
+		value, ok, err := c.LoadDurable(execution.GenericDurableKey(h.Key()))
+		assert.NoError(t, err)
+		assert.True(t, ok, "the container had nothing under the key, so even an empty value is a change")
+		assert.Empty(t, value)
+	})
+
+	t.Run("a marshal that reuses its buffer stores every change", func(t *testing.T) {
+		buffer := make([]byte, 1)
+		h := NewDurableHandle[byte]("boundaryReusedBufferHandle",
+			func() *byte { v := byte(0); return &v },
+			func(input []byte) (*byte, error) { v := input[0]; return &v, nil },
+			func(v *byte) ([]byte, error) { buffer[0] = *v; return buffer, nil },
+			nil,
+		)
+		counting := &storeCountingContainer{inner: executiontype.NewInMemoryContainer()}
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(counting))
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		ref := h.Use(b)
+		for _, v := range []byte{1, 2} {
+			*ref = v
+			boundary(exec, b)
+		}
+		assert.Equal(t, int32(2), counting.storeCalls.Load())
+		value, ok := storedValue(t, counting.inner, h)
+		assert.True(t, ok)
+		assert.Equal(t, []byte{2}, value)
+	})
+
+	t.Run("a value that aliases the loaded bytes stores its changes", func(t *testing.T) {
+		h := NewDurableHandle[[]byte]("boundaryAliasingHandle",
+			func() *[]byte { v := []byte{}; return &v },
+			func(input []byte) (*[]byte, error) { return &input, nil },
+			func(v *[]byte) ([]byte, error) { return *v, nil },
+			nil,
+		)
+		inner := executiontype.NewInMemoryContainer()
+		assert.NoError(t, inner.StoreDurable(execution.GenericDurableKey(h.Key()), []byte("ab")))
+		counting := &storeCountingContainer{inner: inner}
+		exec := execution.NewFlowExecutionWithContainer(containertest.NewStrict(counting))
+		b := newDurableTestBuilder(t, exec, h.Provide)
+
+		(*h.Use(b))[0] = 'x'
+		boundary(exec, b)
+		assert.Equal(t, int32(1), counting.storeCalls.Load(), "the change went unnoticed")
+	})
 
 	t.Run("a change survives the container retrying the transaction", func(t *testing.T) {
 		h := newByteHandle("boundaryRetryingHandle")

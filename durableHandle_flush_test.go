@@ -125,6 +125,44 @@ func TestDurableHandle_ChangesAreCommittedWithTheStepsMemo(t *testing.T) {
 		assert.Equal(t, 1, r, "the step's effect was applied twice")
 		assert.Equal(t, 2, runs, "the step re-ran once (at-least-once), from the container's state")
 	})
+	t.Run("a change whose boundary fails to commit is committed by the next boundary", func(t *testing.T) {
+		h := futura.NewPlainDurableHandle("flush-retried-boundary", func() *int { v := 0; return &v })
+		flowFn := func(b futura.FlowBuilder, _ struct{}) (int, error) {
+			b = h.Provide(b)
+			ref := h.Use(b)
+			phase := futura.State(b, 0)
+			if err := futura.Action(b, func(ctx context.Context) error {
+				*ref = 42
+				if phase.V() == 0 {
+					// restart the replay from inside the step: its boundary's failure then ends the replay, not the execution
+					phase.Set(1)
+					return ctx.Err()
+				}
+				return nil
+			}); err != nil {
+				return 0, err
+			}
+			return *ref, nil
+		}
+		clean := &failingContainer{InMemoryContainer: executiontype.NewInMemoryContainer()}
+		r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(clean)).Execute(t.Context(), flowFn, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 42, r)
+
+		for failAt := 1; failAt <= clean.txs; failAt++ {
+			t.Run(fmt.Sprintf("transaction %d fails", failAt), func(t *testing.T) {
+				c := &failingContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failAt: failAt}
+				_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
+				if err != nil {
+					return
+				}
+				// the execution reported success, so a fresh one over the container must see the change
+				r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c.InMemoryContainer)).Execute(t.Context(), flowFn, struct{}{})
+				assert.NoError(t, err)
+				assert.Equal(t, 42, r, "the change was lost")
+			})
+		}
+	})
 	t.Run("a change made by a step that then fails is committed with the failure", func(t *testing.T) {
 		h := futura.NewPlainDurableHandle("flush-on-failure", func() *int { v := 0; return &v })
 		attempts := 0

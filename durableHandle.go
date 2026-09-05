@@ -32,7 +32,7 @@ var handleSequence atomic.Int32
 // Values are stored in the consuming flow's execution container.
 // constructor is called to create a new value when no value is found in the execution container.
 // unmarshal is called to deserialize the value from the execution container.
-// marshal is called to serialize the value to the execution container.
+// marshal is called to serialize the value to the execution container, at every durable boundary. Its result is copied.
 // cleanup is called to clean up the value when the flow stops execution. It is only called if the value is not nil.
 // all four of these method MUST NOT use the handle it belongs to, it will deadlock for all but cleanup.
 func NewDurableHandle[T any](
@@ -59,13 +59,13 @@ type durableResolver[T any] struct {
 	marshal  func(*T) ([]byte, error)
 	cleanup  func(*T) error
 
-	valueLoader  sync.Once
-	valueLoadErr any
-	// mu guards value and flushed: resolve and Flush can run on different goroutines.
+	// mu guards the fields below, and is held for the whole of a load.
 	mu    sync.Mutex
 	value *T
-	// flushed is the value as last loaded or staged, so that an unchanged value is not stored again.
-	flushed []byte
+	// committed is the resolver's own copy of the bytes the container holds.
+	committed []byte
+	// inContainer is whether the container holds a value.
+	inContainer bool
 }
 
 // Cleanup implements durable.Cleaner. It is only called if the value was resolved.
@@ -93,42 +93,47 @@ func (r *durableResolver[T]) Flush() (value []byte, changed bool) {
 	if err != nil {
 		panic(err)
 	}
-	if bytes.Equal(serialized, r.flushed) {
+	if r.inContainer && bytes.Equal(serialized, r.committed) {
 		return nil, false
 	}
-	r.flushed = serialized
-	return serialized, true
+	return bytes.Clone(serialized), true
 }
 
+// OnCommitted implements durable.Flusher.
+func (r *durableResolver[T]) OnCommitted(value []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.committed = value
+	r.inContainer = true
+}
+
+// resolve returns the value, loading it on the first call. A failed load is retried by the next call.
 func (r *durableResolver[T]) resolve(ctx context.Context, d *DurableHandle[T]) *T {
-	r.valueLoader.Do(func() {
-		defer func() {
-			if rr := recover(); rr != nil {
-				flog.FromContext(ctx).Error("failed to load durable value", "error", rr)
-				r.valueLoadErr = rr
-			}
-		}()
-
-		exec := execution.MustFromContext(ctx)
-		serialized, ok := exec.LoadDurable(ctx, string(d.key))
-		var value *T
-		if !ok {
-			value = d.constructor()
-		} else {
-			var err error
-			if value, err = d.unmarshal(serialized); err != nil {
-				panic(err)
-			}
-		}
-
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.value = value
-		r.flushed = serialized
-	})
-	if r.valueLoadErr != nil {
-		panic(r.valueLoadErr)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.value != nil {
+		return r.value
 	}
+	defer func() {
+		if rr := recover(); rr != nil {
+			flog.FromContext(ctx).Error("failed to load durable value", "error", rr)
+			panic(rr)
+		}
+	}()
+
+	serialized, ok := execution.MustFromContext(ctx).LoadDurable(ctx, string(d.key))
+	var value *T
+	if !ok {
+		value = d.constructor()
+	} else {
+		var err error
+		if value, err = d.unmarshal(serialized); err != nil {
+			panic(err)
+		}
+	}
+	r.value = value
+	r.committed = bytes.Clone(serialized)
+	r.inContainer = ok
 	return r.value
 }
 

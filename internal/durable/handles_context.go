@@ -25,8 +25,10 @@ type Cleaner interface {
 
 // Flusher is implemented by a cached handle whose value is committed at the execution's durable boundaries.
 type Flusher interface {
-	// Flush returns the handle's value if it changed since it was last flushed.
+	// Flush returns the handle's value if it differs from the committed one.
 	Flush() (value []byte, changed bool)
+	// OnCommitted is called once value has been committed.
+	OnCommitted(value []byte)
 }
 
 // Handle is a resolved handle: what the cache flushes at every durable boundary and cleans up at the end.
@@ -60,7 +62,7 @@ func (h *Handles) LoadOrCompute(key HandleKey, compute func() Handle) Handle {
 	return handle
 }
 
-// Flush returns the value of every cached handle that changed since it was last flushed, by key.
+// Flush returns the value of every cached handle that differs from the committed one, by key.
 func (h *Handles) Flush() map[string][]byte {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -71,6 +73,15 @@ func (h *Handles) Flush() map[string][]byte {
 		}
 	}
 	return changed
+}
+
+// OnCommitted is called once the values returned by Flush have been committed.
+func (h *Handles) OnCommitted(flushed map[string][]byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for key, value := range flushed {
+		h.byKey[HandleKey(key)].OnCommitted(value)
+	}
 }
 
 // Cleanup releases every cached handle that has something to release, in LIFO order.

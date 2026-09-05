@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -157,6 +158,7 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 		}
 	})
 	f.dirty = nil
+	f.handles.OnCommitted(changedHandles)
 
 	return sequence.With(replayCtx, flags), dirtyEpoch
 }
@@ -246,12 +248,18 @@ func (f *FlowExecution) ReadBehind(ctx context.Context, durableKey string) ([]by
 		if state, ok = f.dirty[durableKey]; ok {
 			return
 		}
-		state, ok, err = tx.LoadDurable(GenericDurableKey(durableKey))
+		state, ok, err = loadDurable(tx, durableKey)
 	})
 	if err != nil {
 		panic(err)
 	}
 	return state, ok
+}
+
+// loadDurable reads the value under durableKey into memory the caller owns.
+func loadDurable(tx executiontype.ReadOnlyContainer, durableKey string) ([]byte, bool, error) {
+	state, ok, err := tx.LoadDurable(GenericDurableKey(durableKey))
+	return bytes.Clone(state), ok, err
 }
 
 func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.Identity, ok bool) {
@@ -313,6 +321,7 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 		f.flushDirty(tx, changedHandles)
 	})
 	f.dirty = nil
+	f.handles.OnCommitted(changedHandles)
 	sequence.MarkSeen(ctx, identity)
 }
 
@@ -323,7 +332,7 @@ func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]b
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
-		state, ok, err = tx.LoadDurable(GenericDurableKey(durableKey))
+		state, ok, err = loadDurable(tx, durableKey)
 	})
 	if err != nil {
 		panic(err)
