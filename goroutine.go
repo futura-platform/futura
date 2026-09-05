@@ -2,28 +2,38 @@ package futura
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/goroutinebind"
 	"github.com/futura-platform/futura/internal/step"
-	"github.com/petermattis/goid"
 )
 
-var (
-	ErrGoroutineAlreadyBound = errors.New("goroutine already bound")
-)
+// Goroutine is a goroutine of a step, started by Go.
+type Goroutine struct {
+	exited <-chan struct{}
+}
 
-// BindToGoroutine binds the current goroutine to the context.
-// This allows for step implementations to use goroutines safely.
-// If all goroutines have not exited by the time the main goroutine finishes calling the step, the step will fail.
-func BindToGoroutine(ctx context.Context) (context.Context, context.CancelFunc) {
-	activeGoroutines := step.ActiveGoroutinesFrom(ctx)
-	routineId := goid.Get()
-	if !activeGoroutines.Add(routineId) {
-		panic(fmt.Errorf("%w: %d", ErrGoroutineAlreadyBound, routineId))
+// Wait blocks until the goroutine has exited. Waiting on a Goroutine that was never started returns at once.
+func (g Goroutine) Wait() {
+	if g.exited != nil {
+		<-g.exited
 	}
-	return goroutinebind.BindGoroutine(ctx), func() {
-		activeGoroutines.Remove(routineId)
-	}
+}
+
+// Go runs fn on a goroutine of the step, and returns it for the step to Wait on. A step that returns
+// under a running goroutine fails, and a panic of fn is a panic of the step; fn returns its errors to
+// the step the way any Go code does. The context fn receives is bound to its goroutine.
+func Go(ctx context.Context, fn func(ctx context.Context)) Goroutine {
+	done, exited := step.ActiveGoroutinesFrom(ctx).Start()
+	go func() {
+		var panicked error
+		defer func() { done(panicked) }()
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = ftrerrors.PanicError(r)
+			}
+		}()
+		fn(goroutinebind.BindGoroutine(ctx))
+	}()
+	return Goroutine{exited: exited}
 }

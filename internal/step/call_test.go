@@ -107,7 +107,7 @@ func TestCall(t *testing.T) {
 
 	t.Run("calls an fn that adds a goroutine that is not removed before the fn returns, causing the step to fail", func(t *testing.T) {
 		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
-			ActiveGoroutinesFrom(ctx).Add(1)
+			ActiveGoroutinesFrom(ctx).Start()
 			return "result", nil
 		})
 		testutil.PanicsWithErrorIs(t, ErrGoroutinesNotExited, func() {
@@ -117,7 +117,7 @@ func TestCall(t *testing.T) {
 
 	t.Run("calls an fn that panics with a goroutine still active, causing the step to fail for the goroutine", func(t *testing.T) {
 		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
-			ActiveGoroutinesFrom(ctx).Add(1)
+			ActiveGoroutinesFrom(ctx).Start()
 			panic("boom")
 		})
 		testutil.PanicsWithErrorIs(t, ErrGoroutinesNotExited, func() {

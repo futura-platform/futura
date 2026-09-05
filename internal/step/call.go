@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	ftrerrors "github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/replay"
 	stepwrapper "github.com/futura-platform/futura/internal/step/wrapper"
 	"github.com/futura-platform/futura/moment"
@@ -43,10 +44,7 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 		var o outcome[R]
 		activeGoroutines, ctx := withActiveGoroutines(ctx)
 		defer func() {
-			o.panicked = recover()
-			if activeGoroutines.Cardinality() != 0 {
-				o.panicked = fmt.Errorf("%w: %s", ErrGoroutinesNotExited, activeGoroutines)
-			}
+			o.panicked = joinPanics(recover(), activeGoroutines.End(), o.err)
 			ended.Store(&o)
 			// a panic is only re-raised on the flow's goroutine, where the runtime recovers it. On any other
 			// it would kill the process, so it is reported once the wrapper returns
@@ -97,6 +95,25 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 		return o.output, errOverride
 	default:
 		return o.output, o.err
+	}
+}
+
+// joinPanics reports what a step and its goroutines panicked with, as one value, keeping the error the
+// step returned if the goroutines raised anything. A crash beats a termination: the replay would
+// restart on a termination, and a crash must not be lost to that.
+func joinPanics(step any, goroutines error, stepErr error) any {
+	if goroutines == nil {
+		return step
+	}
+	_, stepTerminated := AsReplayTerminated(step)
+	_, goroutinesTerminated := AsReplayTerminated(goroutines)
+	switch {
+	case step == nil || stepTerminated:
+		return errors.Join(goroutines, stepErr)
+	case goroutinesTerminated:
+		return step
+	default:
+		return errors.Join(ftrerrors.PanicError(step), goroutines)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -567,17 +566,14 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 		)
 		_, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
 			return 0, Action(b, func(ctx context.Context) error {
-				var wg sync.WaitGroup
-				wg.Go(func() {
-					gctx, done := BindToGoroutine(ctx)
-					defer done()
+				g := Go(ctx, func(gctx context.Context) {
 					ref := a.Use(a.ProvideContext(gctx))
 					*ref = 1
 					aCleanup.Use(aCleanup.ProvideContext(gctx))
 				})
 				ref := c.Use(c.ProvideContext(ctx))
 				*ref = 2
-				wg.Wait()
+				g.Wait()
 				return nil
 			})
 		}, struct{}{})
