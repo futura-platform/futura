@@ -77,6 +77,18 @@ futura.Source(b, g.Greet)                    // no: English and French are one m
 futura.Source(b.WithKey(g.Name()), g.Greet)  // yes
 ```
 
+Low priority: a type argument is captured state too, but only when it is absent from the fn's
+signature. `pick[int]` and `pick[string]` below have the same type, so one variable holds either, and
+the runtime names both `pick[...]` at one declaration line. With `T` in a parameter or result the
+instantiations are different types, and the assignment does not compile.
+
+```go
+func pick[T any](ctx context.Context) (string, error) { ... } // T only in the body
+fn := pick[int]
+fn = pick[string]                                   // compiles
+futura.Source(b, fn)                                // no: both instantiations are one moment
+```
+
 ## Step inputs and state values should be comparable by `==`
 
 The runtime compares a step's memoized input, and a state's current value, with `==` first. That is
