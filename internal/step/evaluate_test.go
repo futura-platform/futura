@@ -258,7 +258,7 @@ func TestStep(t *testing.T) {
 		}, nil)
 		assert.NoError(t, err)
 		assert.False(t, innerRan)
-		assert.Equal(t, 1, c.CallOrderLength(), "only the outer step's slot is recorded")
+		assert.Equal(t, 0, c.CallOrderLength(), "nothing is recorded for a step that panicked")
 	})
 
 	t.Run("terminates without executing if the replay is cancelled", func(t *testing.T) {

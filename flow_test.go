@@ -186,14 +186,19 @@ func TestFlow(t *testing.T) {
 		assert.Contains(t, err.Error(), "index out of range")
 		assert.Contains(t, err.Error(), "flow_test.go", "the panic's stack is attached")
 	})
-	t.Run("a panic in a step does not hide the failure of its boundary", func(t *testing.T) {
-		c := &failingContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failAt: 2} // the step's boundary
+	t.Run("a step that panics records nothing", func(t *testing.T) {
+		h := futura.NewPlainDurableHandle("panicking-step", func() *int { v := 0; return &v })
+		c := executiontype.NewInMemoryContainer()
 		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewStrict(c)).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {
-			return futura.Source(b, func(ctx context.Context) (string, error) { panic("boom") })
+			b = h.Provide(b)
+			ref := h.Use(b)
+			return futura.Source(b, func(ctx context.Context) (string, error) { *ref = 1; panic("boom") })
 		}, nil)
 		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		assert.ErrorContains(t, err, "boom")
-		assert.ErrorIs(t, err, errCommitFailed)
+		assert.Equal(t, 0, c.CallOrderLength())
+		_, ok, _ := c.LoadDurable(execution.GenericDurableKey("panicking-step"))
+		assert.False(t, ok)
 	})
 	t.Run("Flow recovers from panics with non-error values", func(t *testing.T) {
 		_, err := futura.NewFlowFromContainer[*any, string](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ *any) (string, error) {

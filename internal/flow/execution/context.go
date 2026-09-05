@@ -296,8 +296,7 @@ func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity)
 
 // RecordCurrentMoment stores the current identity+moment (growing the sequence slice if necessary)
 // it also marks the identity as seen.
-// Anything written behind while the moment was produced is committed with it: the memo is the record
-// that the moment's effects happened, so it must never be durable without them.
+// Anything written behind while the moment was produced is committed with it.
 func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment.Identity, currentMoment moment.Moment) {
 	// the lock spans the commit and the clear: a value written behind in between would be cleared
 	// without ever having been flushed

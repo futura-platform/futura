@@ -153,7 +153,7 @@ func TestStep(t *testing.T) {
 				assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 				assert.ErrorIs(t, err, step.ErrNestedStep)
 
-				// only the outer step's slot was recorded, so a corrected flow resumes cleanly over it
+				// nothing was recorded, so a corrected flow resumes cleanly over the container
 				nest = false
 				r, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), flowFn, struct{}{})
 				assert.NoError(t, err)

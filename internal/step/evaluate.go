@@ -55,6 +55,12 @@ func Evaluate[A comparable, R any](
 
 var ErrEvalFailed = errors.New("eval failed")
 
+// evaluating runs fn as the replay's step: no step may evaluate until it returns.
+func evaluating[R any](ctx context.Context, fn func() (R, error)) (R, error) {
+	defer sequence.MarkEvaluating(ctx)()
+	return fn()
+}
+
 func evaluateWithCallstack[A comparable, R any](
 	ctx context.Context,
 	fn moment.Fn[A, R],
@@ -137,53 +143,24 @@ func evaluateWithCallstack[A comparable, R any](
 	currentMomentValue, ok := f.GetMoment(ctx, identity)
 	currentMoment := &currentMomentValue
 
-	// validate BEFORE deferring the output handler, so that in the event of a panic, nothing is recorded.
 	needsExecution := !ok || !currentMoment.Validate(args)
 	if needsExecution {
 		// the recorded moment (if any) is for a stale input, so record the execution against a fresh one.
 		currentMoment = moment.NewMoment(args)
-	}
-	defer func() {
-		// a step that may still be running could still have writers running,
-		// so we should check here before recording to make sure we don't commit inconsistent state
-		r := recover()
-		if rerr, ok := r.(error); ok && errors.Is(rerr, ErrStillRunning) {
-			panic(r)
-		}
+		output, err = evaluating(ctx, func() (R, error) { return call(ctx, fn, identity, args, callstack) })
 		if err != nil {
+			// the failure is recorded, so that the next replay is held to the same branch
 			currentMoment.Invalidate()
-		}
-		// handle the result of the step, if it was successful
-		if recordErr := ftrerrors.Recovering(func() error {
 			f.RecordCurrentMoment(ctx, identity, *currentMoment)
-			return nil
-		}); recordErr != nil {
-			// do a best effort to join the record error with the step's panic, if any
-			if _, terminated := AsReplayTerminated(r); r == nil || terminated {
-				panic(recordErr)
-			}
-			panic(fmt.Errorf("%w: %w", ftrerrors.PanicError(r), recordErr))
-		}
-		if r != nil {
-			panic(r)
-		}
-		if err != nil {
-			return
-		}
-		sequence.Advance(ctx)
-	}()
-	// validate it. If it no longer valid, re execute it and update the cache
-	if needsExecution {
-		done := sequence.MarkEvaluating(ctx)
-		defer done()
-		output, err = call(ctx, fn, identity, args, callstack)
-		if err != nil {
 			return
 		}
 		currentMoment.SetValidOutput(output)
 	} else {
 		cacheStatus = "HIT"
 	}
+	// a step is recorded once it has returned: a panic records nothing, like a crash
+	f.RecordCurrentMoment(ctx, identity, *currentMoment)
+	sequence.Advance(ctx)
 
 	// return the memoized result
 	anyOutput, ok := currentMoment.Output().Get()
