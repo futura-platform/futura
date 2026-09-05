@@ -12,6 +12,8 @@ const (
 	stepWrapperContextKey contextKey = "stepWrapper"
 )
 
+// StepWrapper runs around every step's fn. It must call the step exactly once, and the call must
+// return before the wrapper does.
 type StepWrapper func(
 	ctx context.Context,
 	fnLabel string,

@@ -2,12 +2,16 @@ package futura_test
 
 import (
 	"context"
+	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/futura-platform/futura"
+	"github.com/futura-platform/futura/fopt"
+	"github.com/futura-platform/futura/ftype"
 	"github.com/futura-platform/futura/ftype/executiontype"
 	"github.com/futura-platform/futura/internal/errors"
 	"github.com/futura-platform/futura/internal/flow/execution"
@@ -146,38 +150,58 @@ func TestBindToGoroutine(t *testing.T) {
 
 	t.Run("a step that leaks a goroutine records nothing, since the goroutine may still be writing", func(t *testing.T) {
 		type pair struct{ A, B int }
-		h := futura.NewPlainDurableHandle("leakedWriter", func() *pair { return &pair{} })
-		c := executiontype.NewInMemoryContainer()
-		stop := make(chan struct{})
-		defer close(stop)
-		bound := make(chan struct{})
-		_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(),
-			func(b futura.FlowBuilder, _ struct{}) (int, error) {
-				b = h.Provide(b)
-				ref := h.Use(b)
-				return 0, futura.Action(b, func(ctx context.Context) error {
-					go func() {
-						_, done := futura.BindToGoroutine(ctx)
-						defer done()
-						close(bound)
-						for {
-							select {
-							case <-stop:
-								return
-							default:
-								ref.A++
-								ref.B++
-							}
-						}
-					}()
-					<-bound
-					return nil
-				})
-			}, struct{}{})
-		assert.ErrorIs(t, err, step.ErrGoroutinesNotExited)
-		_, ok, _ := c.LoadDurable(execution.GenericDurableKey("leakedWriter"))
-		assert.False(t, ok, "the handle was flushed while the leaked goroutine was writing it")
-		assert.Equal(t, 0, c.CallOrderLength(), "the step was recorded")
+		recovering := fopt.WithStepWrapper(func(ctx context.Context, fnLabel string, _ any, _ []runtime.Frame, call func() (any, error)) (errOverride error) {
+			defer func() {
+				if r := recover(); r != nil {
+					errOverride = fmt.Errorf("step %s panicked: %v", fnLabel, r)
+				}
+			}()
+			_, err := call()
+			return err
+		})
+		for name, tc := range map[string]struct {
+			exit func() error
+			opts []ftype.FlowLoopOption
+		}{
+			"the step returns": {exit: func() error { return nil }},
+			"the step panics":  {exit: func() error { panic("boom") }},
+			"the step returns under a recovering wrapper": {exit: func() error { return nil }, opts: []ftype.FlowLoopOption{recovering}},
+		} {
+			t.Run(name, func(t *testing.T) {
+				h := futura.NewPlainDurableHandle("leakedWriter", func() *pair { return &pair{} })
+				c := executiontype.NewInMemoryContainer()
+				stop := make(chan struct{})
+				defer close(stop)
+				bound := make(chan struct{})
+				_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(),
+					func(b futura.FlowBuilder, _ struct{}) (int, error) {
+						b = h.Provide(b)
+						ref := h.Use(b)
+						return 0, futura.Action(b, func(ctx context.Context) error {
+							go func() {
+								_, done := futura.BindToGoroutine(ctx)
+								defer done()
+								close(bound)
+								for {
+									select {
+									case <-stop:
+										return
+									default:
+										ref.A++
+										ref.B++
+									}
+								}
+							}()
+							<-bound
+							return tc.exit()
+						})
+					}, struct{}{}, tc.opts...)
+				assert.ErrorIs(t, err, step.ErrGoroutinesNotExited)
+				_, ok, _ := c.LoadDurable(execution.GenericDurableKey("leakedWriter"))
+				assert.False(t, ok, "the handle was flushed while the leaked goroutine was writing it")
+				assert.Equal(t, 0, c.CallOrderLength(), "the step was recorded")
+			})
+		}
 	})
 	t.Run("a goroutine that has bound but not yet finished work fails the step even when sleeping briefly", func(t *testing.T) {
 		// This documents the boundary: the active-goroutines check happens

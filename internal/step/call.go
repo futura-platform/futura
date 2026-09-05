@@ -5,69 +5,99 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/futura-platform/futura/internal/flow/replay"
 	stepwrapper "github.com/futura-platform/futura/internal/step/wrapper"
 	"github.com/futura-platform/futura/moment"
+	"github.com/petermattis/goid"
 )
 
 var (
 	ErrIllegalStepWrapperBehavior = errors.New("illegal step wrapper behavior")
 	ErrDidNotCall                 = errors.New("did not call")
 	ErrCalledMultipleTimes        = errors.New("called multiple times")
+	ErrDidNotReturn               = errors.New("returned before the call did")
 	ErrRecoveredCall              = errors.New("recovered a panic from the call")
-	ErrGoroutinesNotExited        = errors.New("goroutines not exited")
+	// ErrStillRunning is raised when a step's code may still be running after the step ended: a leaked
+	// goroutine, or a call the wrapper abandoned. Nothing of the step is recorded, since it may still be writing.
+	ErrStillRunning        = errors.New("the step may still be running")
+	ErrGoroutinesNotExited = fmt.Errorf("%w: goroutines not exited", ErrStillRunning)
 )
 
+// outcome is how a call of the step's fn ended.
+type outcome[R any] struct {
+	output R
+	err    error
+	// panicked is what the fn panicked with, if it did not return.
+	panicked any
+}
+
 func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity moment.Identity, args A, callstack []runtime.Frame) (output R, err error) {
-	callCount := 0
-	// what the call panicked with, if it did not return: a wrapper may have recovered it
-	var callPanic any
+	// the wrapper may run the call on another goroutine, so the outcome is published, not assigned to the frame
+	var calls atomic.Int32
+	var ended atomic.Pointer[outcome[R]]
+	flowGoroutine := goid.Get()
 	callFn := func() (any, error) {
-		callCount++
+		calls.Add(1)
+		var o outcome[R]
+		activeGoroutines, ctx := withActiveGoroutines(ctx)
 		defer func() {
-			if callPanic = recover(); callPanic != nil {
-				panic(callPanic)
+			o.panicked = recover()
+			if activeGoroutines.Cardinality() != 0 {
+				o.panicked = fmt.Errorf("%w: %s", ErrGoroutinesNotExited, activeGoroutines)
+			}
+			ended.Store(&o)
+			// a panic is only re-raised on the flow's goroutine, where the runtime recovers it. On any other
+			// it would kill the process, so it is reported once the wrapper returns
+			if o.panicked != nil && goid.Get() == flowGoroutine {
+				panic(o.panicked)
 			}
 		}()
-		activeGoroutines, ctx := withActiveGoroutines(ctx)
-		// make sure to assign to these variables (output, err) in the correct scope (NOT THE LOCAL SCOPE OF THIS FUNCTION)
-		output, err = fn.Call(ctx, identity, args)
-		if activeGoroutines.Cardinality() != 0 {
-			panic(fmt.Errorf("%w: %s", ErrGoroutinesNotExited, activeGoroutines))
-		}
-		if errors.Is(err, ctx.Err()) {
+		o.output, o.err = fn.Call(ctx, identity, args)
+		if errors.Is(o.err, ctx.Err()) {
 			// the step returned the cancellation itself, rather than a verdict of its own.
 			// if the cancellation was the replay's, terminate: the cancellation is not a failure.
 			terminateIfReplayCancelled(ctx)
 		}
-		return output, err
+		return o.output, o.err
 	}
+
 	stepWrapper, ok := stepwrapper.FromContext(ctx)
+	var errOverride error
 	if !ok {
 		callFn()
 	} else {
-		errOverride := stepWrapper(ctx, fn.Label(), args, callstack, callFn)
-		if callCount == 0 {
-			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrDidNotCall))
-		} else if callCount > 1 {
-			panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrCalledMultipleTimes))
-		} else if callPanic != nil {
-			// the wrapper recovered the call's panic. A termination is the runtime's own and is re-raised;
-			// anything else was the step's, and a wrapper may not turn it into a return.
-			if _, terminated := AsReplayTerminated(callPanic); terminated {
-				panic(callPanic)
-			}
-			panic(fmt.Errorf("%w: %w: %v", ErrIllegalStepWrapperBehavior, ErrRecoveredCall, callPanic))
-		} else if errOverride != nil {
-			err = errOverride
-		}
-	}
-	if err != nil {
-		return
+		errOverride = stepWrapper(ctx, fn.Label(), args, callstack, callFn)
 	}
 
-	return output, nil
+	switch o := ended.Load(); {
+	case calls.Load() == 0:
+		panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrDidNotCall))
+	case calls.Load() > 1:
+		panic(fmt.Errorf("%w: %w", ErrIllegalStepWrapperBehavior, ErrCalledMultipleTimes))
+	case o == nil:
+		// if the wrapper called the fn in a goroutine and exitted before it, it may still be running.
+		panic(fmt.Errorf("%w: %w: %w", ErrStillRunning, ErrIllegalStepWrapperBehavior, ErrDidNotReturn))
+	case o.panicked != nil:
+		// a step panic is either a runtime signal, or the step's own panic (which is terminal)
+		if _, terminated := AsReplayTerminated(o.panicked); terminated {
+			panic(o.panicked)
+		}
+		if perr, isErr := o.panicked.(error); isErr && errors.Is(perr, ErrStillRunning) {
+			panic(o.panicked)
+		}
+
+		// attempt to recover the error type to preserve go error composition
+		if perr, isErr := o.panicked.(error); isErr {
+			panic(fmt.Errorf("%w: %w: %w", ErrIllegalStepWrapperBehavior, ErrRecoveredCall, perr))
+		}
+		panic(fmt.Errorf("%w: %w: %v", ErrIllegalStepWrapperBehavior, ErrRecoveredCall, o.panicked))
+	case errOverride != nil:
+		return o.output, errOverride
+	default:
+		return o.output, o.err
+	}
 }
 
 // ErrReplayTerminated is the panic value that "terminates" a cancelled replay.

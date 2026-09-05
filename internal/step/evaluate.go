@@ -144,10 +144,10 @@ func evaluateWithCallstack[A comparable, R any](
 		currentMoment = moment.NewMoment(args)
 	}
 	defer func() {
-		// a step that leaked goroutines could still have writers running,
+		// a step that may still be running could still have writers running,
 		// so we should check here before recording to make sure we don't commit inconsistent state
 		if r := recover(); r != nil {
-			if rerr, ok := r.(error); ok && errors.Is(rerr, ErrGoroutinesNotExited) {
+			if rerr, ok := r.(error); ok && errors.Is(rerr, ErrStillRunning) {
 				panic(r)
 			}
 			defer panic(r)

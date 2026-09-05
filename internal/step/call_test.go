@@ -114,4 +114,72 @@ func TestCall(t *testing.T) {
 			call(replayCtx(t), fn, moment.Identity{}, struct{}{}, nil)
 		})
 	})
+
+	t.Run("calls an fn that panics with a goroutine still active, causing the step to fail for the goroutine", func(t *testing.T) {
+		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
+			ActiveGoroutinesFrom(ctx).Add(1)
+			panic("boom")
+		})
+		testutil.PanicsWithErrorIs(t, ErrGoroutinesNotExited, func() {
+			call(replayCtx(t), fn, moment.Identity{}, struct{}{}, nil)
+		})
+	})
+
+	t.Run("calls the fn with a wrapper that recovers the fn's panic, reporting the panic in the chain", func(t *testing.T) {
+		expectedError := errors.New("expected error")
+		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
+			panic(expectedError)
+		})
+		ctx := stepwrapper.With(replayCtx(t), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+			defer func() { recover() }()
+			call()
+			return nil
+		})
+		testutil.PanicsWithErrorIs(t, ErrRecoveredCall, func() {
+			call(ctx, fn, moment.Identity{}, struct{}{}, nil)
+		})
+		testutil.PanicsWithErrorIs(t, expectedError, func() {
+			call(ctx, fn, moment.Identity{}, struct{}{}, nil)
+		})
+	})
+
+	t.Run("calls the fn with an illegal wrapper that returns before the call does", func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
+			<-release
+			return "result", nil
+		})
+		ctx := stepwrapper.With(replayCtx(t), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+			started := make(chan struct{})
+			go func() {
+				close(started)
+				call()
+			}()
+			<-started
+			return nil
+		})
+		testutil.PanicsWithErrorIs(t, ErrDidNotReturn, func() {
+			call(ctx, fn, moment.Identity{}, struct{}{}, nil)
+		})
+	})
+
+	t.Run("calls the fn with a wrapper that runs the call on another goroutine, reporting the fn's panic on its own", func(t *testing.T) {
+		expectedError := errors.New("expected error")
+		fn := moment.NewFn(func(ctx context.Context, args struct{}) (string, error) {
+			panic(expectedError)
+		})
+		ctx := stepwrapper.With(replayCtx(t), func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				call()
+			}()
+			<-done
+			return nil
+		})
+		testutil.PanicsWithErrorIs(t, expectedError, func() {
+			call(ctx, fn, moment.Identity{}, struct{}{}, nil)
+		})
+	})
 }

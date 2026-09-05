@@ -195,6 +195,26 @@ func TestWithMaxFailures(t *testing.T) {
 		require.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		require.Equal(t, 2, calls)
 	})
+	t.Run("a wrapper that returns before the call does cannot memoize an output the step never produced", func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		abandoning := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
+			started := make(chan struct{})
+			go func() {
+				close(started)
+				call()
+			}()
+			<-started
+			return nil
+		}
+		c := executiontype.NewInMemoryContainer()
+		flowFn := func(b futura.FlowBuilder, _ any) (string, error) {
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (string, error) { <-release; return "real", nil }, nil)
+		}
+		_, err := futura.NewFlowFromContainer[any, string](containertest.NewStrict(c)).Execute(t.Context(), flowFn, nil, fopt.WithStepWrapper(abandoning))
+		require.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		require.Equal(t, 0, c.CallOrderLength(), "the step was recorded")
+	})
 	t.Run("a cancellation that lands during a step is not counted as a failure", func(t *testing.T) {
 		container := executiontype.NewInMemoryContainer()
 		var cancelDuringStep context.CancelFunc
