@@ -113,6 +113,49 @@ func TestState(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, r)
 	})
+	t.Run("the initial value is part of the state's identity", func(t *testing.T) {
+		type pair struct{ A, B string }
+		run := func(t *testing.T, c executiontype.TransactionalContainer, initial pair) pair {
+			t.Helper()
+			r, err := futura.NewFlowFromContainer[struct{}, pair](containertest.NewStrict(c)).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (pair, error) {
+				s := futura.State(b, initial)
+				if s.V() == initial {
+					s.Set(pair{"set", initial.A + "|" + initial.B})
+				}
+				return s.V(), nil
+			}, struct{}{})
+			assert.NoError(t, err)
+			return r
+		}
+		t.Run("a different initial value is a different state", func(t *testing.T) {
+			c := executiontype.NewInMemoryContainer()
+			assert.Equal(t, pair{"set", "x|y"}, run(t, c, pair{"x", "y"}))
+			assert.Equal(t, pair{"set", "p|q"}, run(t, c, pair{"p", "q"}))
+		})
+		t.Run("even one that prints the same", func(t *testing.T) {
+			c := executiontype.NewInMemoryContainer()
+			assert.Equal(t, pair{"set", "a b|c"}, run(t, c, pair{"a b", "c"}))
+			assert.Equal(t, pair{"set", "a|b c"}, run(t, c, pair{"a", "b c"}))
+		})
+		t.Run("a pointer initial value is the same state in every process", func(t *testing.T) {
+			c := executiontype.NewInMemoryContainer()
+			writes := 0
+			for range 3 {
+				n := 1
+				_, err := futura.NewFlowFromContainer[struct{}, int](containertest.NewStrict(c)).Execute(t.Context(), func(b futura.FlowBuilder, _ struct{}) (int, error) {
+					s := futura.State(b, &n)
+					if *s.V() == 1 {
+						writes++
+						two := 2
+						s.Set(&two)
+					}
+					return *s.V(), nil
+				}, struct{}{})
+				assert.NoError(t, err)
+			}
+			assert.Equal(t, 1, writes, "a fresh pointer minted a fresh state")
+		})
+	})
 	t.Run("multiple initial values will cause a panic", func(t *testing.T) {
 		assert.Panics(t, func() {
 			futura.State(futura.FlowBuilder{}, 1, 2)
