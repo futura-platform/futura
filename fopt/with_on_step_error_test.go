@@ -65,4 +65,25 @@ func TestWithOnStepError(t *testing.T) {
 		assert.ErrorIs(t, err, testErr)
 		assert.Equal(t, "failed", r)
 	})
+
+	t.Run("onError does not fire for a restart recovered by a wrapper beneath WithOnStepError", func(t *testing.T) {
+		var fired []error
+		onError := func(ctx context.Context, fnLabel string, callstack []runtime.Frame, err error) (continueExecution bool) {
+			fired = append(fired, err)
+			return true
+		}
+		r, err := futura.NewFlowFromContainer[any, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ any) (int, error) {
+			s := futura.State(b, 0)
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (int, error) {
+				if v := s.V(); v < 3 {
+					s.Set(v + 1)
+					return 0, ctx.Err()
+				}
+				return s.V(), nil
+			}, nil)
+		}, nil, fopt.WithOnStepError(onError), fopt.WithStepWrapper(recoveringStepWrapper))
+		assert.NoError(t, err)
+		assert.Equal(t, 3, r)
+		assert.Empty(t, fired)
+	})
 }

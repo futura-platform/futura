@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/futura-platform/futura/ftype/executiontype"
@@ -260,6 +261,20 @@ func TestStartNewReplay(t *testing.T) {
 		replayCtx, _ := f.StartNewReplay(ctx)
 		assert.True(t, replay.Has(replayCtx))
 	})
+	t.Run("a boundary that fails to commit derives no replay", func(t *testing.T) {
+		f := running(t, NewFlowExecutionWithContainer(rejectingContainer{executiontype.NewInMemoryContainer()}))
+		testutil.PanicsWithErrorIs(t, ErrTransactionFailed, func() { f.StartNewReplay(WithFlow(t.Context(), f)) })
+		assert.Nil(t, f.cancelCurrentReplay)
+	})
+}
+
+// rejectingContainer is a container that rejects every write transaction.
+type rejectingContainer struct {
+	*executiontype.InMemoryContainer
+}
+
+func (rejectingContainer) Transact(context.Context, func(context.Context, executiontype.Container) error) error {
+	return errors.New("commit failed")
 }
 
 func TestRecordCurrentMoment(t *testing.T) {

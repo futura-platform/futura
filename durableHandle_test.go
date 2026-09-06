@@ -516,6 +516,33 @@ func TestDurableHandle_Cleanup(t *testing.T) {
 			t.Fatal("the execution never ended: the cleanup blocked on the handles cache")
 		}
 	})
+	t.Run("a handle first used inside another handle's cleanup is cleaned up too", func(t *testing.T) {
+		cleanups := 0
+		inner := NewDurableHandle[int]("cleanupResolvedInCleanup",
+			func() *int { v := 0; return &v },
+			func(input []byte) (*int, error) { v := int(input[0]); return &v, nil },
+			func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
+			func(*int) error { cleanups++; return nil },
+		)
+		var flowCtx context.Context
+		outer := NewDurableHandle[int]("cleanupResolvesAnotherHandle",
+			func() *int { v := 0; return &v },
+			func(input []byte) (*int, error) { v := int(input[0]); return &v, nil },
+			func(v *int) ([]byte, error) { return []byte{byte(*v)}, nil },
+			func(*int) error {
+				inner.Use(inner.ProvideContext(flowCtx))
+				return nil
+			},
+		)
+		_, err := NewFlowFromContainer[struct{}, int](containertest.NewInMemory()).Execute(t.Context(), func(b FlowBuilder, _ struct{}) (int, error) {
+			b = outer.Provide(b)
+			flowCtx = b
+			outer.Use(b)
+			return 0, nil
+		}, struct{}{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, cleanups)
+	})
 	t.Run("a builder from a previous execution cannot use a handle", func(t *testing.T) {
 		// the value a stale builder would hand back belongs to an execution that ended: it was cleaned
 		// up, and its changes no longer flush

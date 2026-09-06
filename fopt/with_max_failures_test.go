@@ -79,6 +79,21 @@ func TestWithMaxFailures(t *testing.T) {
 		}, nil, fopt.WithMaxFailures(2))
 		require.ErrorIs(t, err, fopt.ErrMaxFailuresReached)
 	})
+	t.Run("a restart reported through context.Cause is not counted as a failure", func(t *testing.T) {
+		r, err := futura.NewFlowFromContainer[any, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ any) (int, error) {
+			s := futura.State(b, 0)
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (int, error) {
+				if v := s.V(); v < 3 {
+					s.Set(v + 1)
+					<-ctx.Done()
+					return 0, fmt.Errorf("aborted: %w", context.Cause(ctx))
+				}
+				return s.V(), nil
+			}, nil)
+		}, nil, fopt.WithMaxFailures(2))
+		require.NoError(t, err)
+		require.Equal(t, 3, r)
+	})
 	t.Run("a state change made in response to the cancellation does not restart the flow", func(t *testing.T) {
 		// Reaching the limit ends the flow. A flow that records the failure in a state (which restarts
 		// the replay) must still end, otherwise every replay reaches the limit again and it never does.
@@ -100,18 +115,6 @@ func TestWithMaxFailures(t *testing.T) {
 		require.Equal(t, 3, replays)
 	})
 	t.Run("a wrapper that recovers panics cannot turn a replay's termination into a failure", func(t *testing.T) {
-		// a replay is terminated by a panic raised inside the wrapper's frame. A wrapper that recovers
-		// panics (annotating middleware) hands back an error instead; the runtime must still see the
-		// termination for what it is, not count it as a failure.
-		annotating := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
-			defer func() {
-				if r := recover(); r != nil {
-					errOverride = fmt.Errorf("step %s panicked: %w", fnLabel, ftrerrors.PanicError(r))
-				}
-			}()
-			_, err := call()
-			return err
-		}
 		r, err := futura.NewFlowFromContainer[any, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ any) (int, error) {
 			s := futura.State(b, 0)
 			return futura.Step(b, func(ctx context.Context, _ *struct{}) (int, error) {
@@ -121,20 +124,11 @@ func TestWithMaxFailures(t *testing.T) {
 				}
 				return s.V(), nil
 			}, nil)
-		}, nil, fopt.WithMaxFailures(2), fopt.WithStepWrapper(annotating))
+		}, nil, fopt.WithMaxFailures(2), fopt.WithStepWrapper(recoveringStepWrapper))
 		require.NoError(t, err)
 		require.Equal(t, 3, r)
 	})
 	t.Run("a wrapper that recovers a step's own panic after a state change reports the panic, not a restart", func(t *testing.T) {
-		annotating := func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
-			defer func() {
-				if r := recover(); r != nil {
-					errOverride = fmt.Errorf("step %s panicked: %w", fnLabel, ftrerrors.PanicError(r))
-				}
-			}()
-			_, err := call()
-			return err
-		}
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
 		replays := 0
@@ -145,7 +139,7 @@ func TestWithMaxFailures(t *testing.T) {
 				s.Set(s.V() + 1) // the replay is now cancelled for a restart
 				panic("a real bug in the step")
 			}, nil)
-		}, nil, fopt.WithStepWrapper(annotating))
+		}, nil, fopt.WithStepWrapper(recoveringStepWrapper))
 		require.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
 		require.ErrorContains(t, err, "a real bug in the step")
 		require.NotErrorIs(t, err, context.DeadlineExceeded, "the flow restarted forever instead of reporting the panic")
@@ -246,4 +240,34 @@ func TestWithMaxFailures(t *testing.T) {
 		_, err := futura.NewFlowFromContainer[any, any](containertest.NewStrict(container)).Execute(t.Context(), flowFn, nil, fopt.WithMaxFailures(2))
 		require.NoError(t, err)
 	})
+	t.Run("a real failure after restarts recovered by a wrapper beneath WithMaxFailures is within budget", func(t *testing.T) {
+		failed := false
+		r, err := futura.NewFlowFromContainer[any, int](containertest.NewInMemory()).Execute(t.Context(), func(b futura.FlowBuilder, _ any) (int, error) {
+			s := futura.State(b, 0)
+			return futura.Step(b, func(ctx context.Context, _ *struct{}) (int, error) {
+				if v := s.V(); v < 3 {
+					s.Set(v + 1)
+					return 0, ctx.Err()
+				}
+				if !failed {
+					failed = true
+					return 0, errors.New("transient")
+				}
+				return s.V(), nil
+			}, nil)
+		}, nil, fopt.WithMaxFailures(2), fopt.WithStepWrapper(recoveringStepWrapper))
+		require.NoError(t, err)
+		require.Equal(t, 3, r)
+	})
+}
+
+// recoveringStepWrapper is a legal wrapper that hands a step's panic back as an error, as annotating middleware does.
+func recoveringStepWrapper(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (any, error)) (errOverride error) {
+	defer func() {
+		if r := recover(); r != nil {
+			errOverride = fmt.Errorf("step %s panicked: %w", fnLabel, ftrerrors.PanicError(r))
+		}
+	}()
+	_, err := call()
+	return err
 }

@@ -45,14 +45,23 @@ func initializeSession(ctx context.Context, _ struct{}) error {
 
 	httpCookies := make([]*http.Cookie, len(cookies))
 	for i, cookie := range cookies {
-		httpCookies[i] = &http.Cookie{
-			Name:    cookie.Name,
-			Value:   cookie.Value,
-			Domain:  cookie.Domain,
-			Path:    cookie.Path,
-			Expires: time.Unix(int64(cookie.Expires), 0),
-		}
+		httpCookies[i] = httpCookie(cookie)
 	}
 	httpClient.Jar.SetCookies(sessionInitLocation, httpCookies)
 	return nil
+}
+
+// httpCookie is the browser's cookie as the cookie jar takes it: a session cookie has no expiry.
+func httpCookie(cookie *network.Cookie) *http.Cookie {
+	var expires time.Time
+	if !cookie.Session {
+		expires = time.Unix(int64(cookie.Expires), 0)
+	}
+	return &http.Cookie{
+		Name:    cookie.Name,
+		Value:   cookie.Value,
+		Domain:  cookie.Domain,
+		Path:    cookie.Path,
+		Expires: expires,
+	}
 }

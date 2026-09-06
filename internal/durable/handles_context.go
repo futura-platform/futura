@@ -84,20 +84,21 @@ func (h *Handles) OnCommitted(flushed map[string][]byte) {
 	}
 }
 
-// Cleanup releases every cached handle that has something to release, in LIFO order.
+// Cleanup releases every cached handle in LIFO order, including the ones a cleanup resolves.
 func (h *Handles) Cleanup() error {
-	h.mu.Lock()
-	toCleanup := make([]Handle, 0, len(h.order))
-	for i := len(h.order) - 1; i >= 0; i-- {
-		toCleanup = append(toCleanup, h.byKey[h.order[i]])
-	}
-	h.mu.Unlock()
-
 	var err error
-	for _, handle := range toCleanup {
+	for {
+		h.mu.Lock()
+		if len(h.order) == 0 {
+			h.mu.Unlock()
+			return err
+		}
+		last := h.order[len(h.order)-1]
+		h.order = h.order[:len(h.order)-1]
+		handle := h.byKey[last]
+		h.mu.Unlock()
 		err = errors.Join(err, ftrerrors.Recovering(handle.Cleanup))
 	}
-	return err
 }
 
 // WithHandles puts an execution's cache of handles on ctx, for handles to resolve themselves through.

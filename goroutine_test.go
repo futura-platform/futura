@@ -177,6 +177,30 @@ func TestGo(t *testing.T) {
 			assert.NotErrorIs(t, err, fopt.ErrMaxFailuresReached)
 		})
 	})
+	t.Run("a step blocked on a goroutine's result is released when the goroutine panics", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		c := executiontype.NewInMemoryContainer()
+		var cause error
+		_, err := futura.NewFlowFromContainer[struct{}, string](containertest.NewStrict(c)).Execute(ctx,
+			func(b futura.FlowBuilder, _ struct{}) (string, error) {
+				return futura.Source(b, func(ctx context.Context) (string, error) {
+					res := make(chan string)
+					futura.Go(ctx, func(ctx context.Context) { goroutineThatPanics() })
+					select {
+					case v := <-res:
+						return v, nil
+					case <-ctx.Done():
+						cause = context.Cause(ctx)
+						return "", fmt.Errorf("%w", cause)
+					}
+				})
+			}, struct{}{})
+		assert.ErrorIs(t, err, ftrerrors.ErrFlowPanic)
+		assert.ErrorContains(t, err, "goroutine boom")
+		assert.ErrorContains(t, cause, "goroutine boom", "the step's context is cancelled with the panic")
+		assert.Equal(t, 0, c.CallOrderLength(), "the step was recorded")
+	})
 	t.Run("a goroutine's panic is reported with the step's own exit", func(t *testing.T) {
 		for name, exit := range map[string]func() (string, error){
 			"error": func() (string, error) { return "", errors.New("step error root cause") },

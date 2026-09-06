@@ -103,6 +103,18 @@ futura.Step(b, fn, cfg)           // yes: == answers on the fast path
 futura.State(b, math.NaN())       // works via the fallback; avoid if the value can be represented otherwise
 ```
 
+An interface-typed value is a different matter: it satisfies `comparable`, but `==` on two interfaces
+holding an uncomparable dynamic type (a slice, a map, a func, or a struct with one) panics at runtime
+instead of reaching the fallback. The first execution is fine, since a memo miss compares nothing; the
+panic lands on the next replay, when the memo is consulted. The fast path is not guarded, on purpose.
+The linter can: flag a step input or State type that is an interface, or a struct with an interface
+field, whose implementations are not all comparable.
+
+```go
+type input struct{ Id string; Handler }   // Handler is an interface
+futura.Step(b, fn, input{..., sliceHandler{}}) // no: panics on the next replay
+```
+
 Flag pointer-typed and interface-typed step inputs and state types, and float fields that can carry NaN,
 as "will always take the slow comparison". Do not treat them as errors.
 

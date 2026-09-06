@@ -9,6 +9,7 @@ import (
 
 	"github.com/futura-platform/futura"
 	"github.com/futura-platform/futura/ftype"
+	"github.com/futura-platform/futura/internal/step"
 )
 
 var ErrMaxFailuresReached = errors.New("max failures exceeded")
@@ -20,7 +21,7 @@ func WithMaxFailures(maxFailures int32) ftype.FlowLoopOption {
 		countedCtx := failureCountHandle.ProvideContext(ctx)
 		return WithStepWrapper(func(ctx context.Context, fnLabel string, args any, callstack []runtime.Frame, call func() (output any, err error)) (errOverride error) {
 			_, err := call()
-			if err != nil {
+			if err != nil && !errors.Is(err, step.ErrReplayTerminated) {
 				newFailureCount := failureCountHandle.Use(ctx).Add(1)
 				if newFailureCount > maxFailures {
 					return fmt.Errorf("%w: %w: %d, last error: %w", ftype.ErrCancelFlow, ErrMaxFailuresReached, newFailureCount, err)

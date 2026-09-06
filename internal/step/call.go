@@ -53,7 +53,7 @@ func call[A comparable, R any](ctx context.Context, fn moment.Fn[A, R], identity
 			}
 		}()
 		o.output, o.err = fn.Call(ctx, identity, args)
-		if errors.Is(o.err, ctx.Err()) {
+		if errors.Is(o.err, ctx.Err()) || errors.Is(o.err, context.Cause(ctx)) {
 			// the step returned the cancellation itself, rather than a verdict of its own.
 			// if the cancellation was the replay's, terminate: the cancellation is not a failure.
 			terminateIfReplayCancelled(ctx)

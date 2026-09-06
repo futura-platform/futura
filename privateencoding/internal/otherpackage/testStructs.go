@@ -1,5 +1,7 @@
 package otherpackage
 
+import "reflect"
+
 type UnsafeValueTest struct {
 	ExportedField   int
 	unexportedField int
@@ -31,3 +33,9 @@ func NewCodecTestStruct[T any](value T) *CodecTest[T] {
 		iStructField: struct{ Field T }{Field: value},
 	}
 }
+
+// UnexportedFieldType is an unnamed struct whose unexported field makes this package part of its identity.
+func UnexportedFieldType() reflect.Type { return reflect.TypeOf(struct{ id int }{}) }
+
+// UnexportedMethodType is an unnamed interface whose unexported method makes this package part of its identity.
+func UnexportedMethodType() reflect.Type { return reflect.TypeFor[interface{ id() }]() }

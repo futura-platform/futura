@@ -24,15 +24,12 @@ var ErrStepEnded = errors.New("the step has ended")
 // them panicked with. The step may not end until it is empty, and a goroutine's panic is the step's.
 type ActiveGoroutines struct {
 	// mu makes a goroutine's exit and the step's end one decision: exactly one of them reports the panic.
-	mu      sync.Mutex
-	next    int64
-	ended   bool
-	running mapset.Set[int64]
-	panics  map[int64]error
-}
-
-func newActiveGoroutines() *ActiveGoroutines {
-	return &ActiveGoroutines{running: mapset.NewThreadUnsafeSet[int64](), panics: map[int64]error{}}
+	mu         sync.Mutex
+	next       int64
+	ended      bool
+	running    mapset.Set[int64]
+	panics     map[int64]error
+	cancelStep context.CancelCauseFunc
 }
 
 // Start registers a goroutine before it runs. done unregisters it with what it panicked with, if
@@ -52,6 +49,9 @@ func (g *ActiveGoroutines) Start() (done func(panicked error), exited <-chan str
 		g.running.Remove(id)
 		if panicked != nil {
 			g.panics[id] = panicked
+			// release the step from being blocked by this goroutine's panic
+			// (since it should be waiting for this goroutine to exit)
+			g.cancelStep(panicked)
 		}
 		ended := g.ended
 		g.mu.Unlock()
@@ -90,8 +90,10 @@ func (g *ActiveGoroutines) End() error {
 	}
 }
 
+// withActiveGoroutines derives the step's context, which its register cancels when a goroutine panics.
 func withActiveGoroutines(ctx context.Context) (*ActiveGoroutines, context.Context) {
-	g := newActiveGoroutines()
+	ctx, cancel := context.WithCancelCause(ctx)
+	g := &ActiveGoroutines{running: mapset.NewThreadUnsafeSet[int64](), panics: map[int64]error{}, cancelStep: cancel}
 	return g, context.WithValue(ctx, activeGoroutinesContextKey, g)
 }
 

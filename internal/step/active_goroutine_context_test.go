@@ -16,7 +16,7 @@ func TestActiveGoroutines(t *testing.T) {
 	}
 	t.Run("a crash beats a termination from another goroutine, whichever started first", func(t *testing.T) {
 		for _, terminationFirst := range []bool{true, false} {
-			g := newActiveGoroutines()
+			g, _ := withActiveGoroutines(t.Context())
 			first, _ := g.Start()
 			second, _ := g.Start()
 			if terminationFirst {
@@ -32,14 +32,21 @@ func TestActiveGoroutines(t *testing.T) {
 		}
 	})
 	t.Run("a termination alone is returned as it is", func(t *testing.T) {
-		g := newActiveGoroutines()
+		g, _ := withActiveGoroutines(t.Context())
 		done, _ := g.Start()
 		done(termination())
 		_, ok := AsReplayTerminated(g.End())
 		assert.True(t, ok)
 	})
+	t.Run("a panic cancels the step's context with itself", func(t *testing.T) {
+		g, ctx := withActiveGoroutines(t.Context())
+		done, _ := g.Start()
+		boom := errors.New("real boom")
+		done(boom)
+		assert.ErrorIs(t, context.Cause(ctx), boom)
+	})
 	t.Run("a leak is reported with the panics of those that ended", func(t *testing.T) {
-		g := newActiveGoroutines()
+		g, _ := withActiveGoroutines(t.Context())
 		g.Start()
 		done, _ := g.Start()
 		done(errors.New("real boom"))

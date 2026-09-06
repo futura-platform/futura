@@ -6,6 +6,7 @@ import (
 	"testing"
 	texttemplate "text/template"
 
+	"github.com/futura-platform/futura/privateencoding/internal/otherpackage"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,6 +39,16 @@ func TestTypeRegistrationName(t *testing.T) {
 		html := reflect.TypeOf(struct{ T *htmltemplate.Template }{})
 		assert.Equal(t, text.String(), html.String())
 		assert.NotEqual(t, typeRegistrationName(text), typeRegistrationName(html))
+	})
+
+	t.Run("an unnamed struct qualifies its unexported fields by their package", func(t *testing.T) {
+		here, there := reflect.TypeOf(struct{ id int }{}), otherpackage.UnexportedFieldType()
+		assert.NotEqual(t, typeRegistrationName(here), typeRegistrationName(there))
+	})
+
+	t.Run("an unnamed interface qualifies its unexported methods by their package", func(t *testing.T) {
+		here, there := reflect.TypeFor[interface{ id() }](), otherpackage.UnexportedMethodType()
+		assert.NotEqual(t, typeRegistrationName(here), typeRegistrationName(there))
 	})
 }
 

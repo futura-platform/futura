@@ -142,9 +142,6 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	replayCtx, cancel := replay.With(ctx)
-	f.cancelCurrentReplay = cancel
-
 	changedHandles := f.handles.Flush()
 	// The transaction may be retried by the container, so it only reads and writes durable state.
 	// In-memory state (the dirty state) is consumed after it commits.
@@ -160,6 +157,8 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	f.dirtyState = nil
 	f.handles.OnCommitted(changedHandles)
 
+	replayCtx, cancel := replay.With(ctx)
+	f.cancelCurrentReplay = cancel
 	return sequence.With(replayCtx, flags), dirtyEpoch
 }
 

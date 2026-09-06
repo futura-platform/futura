@@ -105,7 +105,7 @@ func typeRegistrationName(rt reflect.Type) string {
 			if i > 0 {
 				b.WriteString(";")
 			}
-			b.WriteString(" " + f.Name + " " + typeRegistrationName(f.Type))
+			b.WriteString(" " + memberName(f.PkgPath, f.Name) + " " + typeRegistrationName(f.Type))
 			if f.Tag != "" {
 				b.WriteString(" " + strconv.Quote(string(f.Tag)))
 			}
@@ -137,11 +137,19 @@ func typeRegistrationName(rt reflect.Type) string {
 			if i > 0 {
 				b.WriteString(";")
 			}
-			b.WriteString(" " + m.Name + strings.TrimPrefix(typeRegistrationName(m.Type), "func"))
+			b.WriteString(" " + memberName(m.PkgPath, m.Name) + strings.TrimPrefix(typeRegistrationName(m.Type), "func"))
 		}
 		b.WriteString(" }")
 		return b.String()
 	default:
 		return rt.String()
 	}
+}
+
+// memberName is a member's name, qualified by its package when unexported.
+func memberName(pkgPath, name string) string {
+	if pkgPath == "" {
+		return name
+	}
+	return pkgPath + "." + name
 }
