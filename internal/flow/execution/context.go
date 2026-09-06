@@ -143,12 +143,18 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	defer f.mu.Unlock()
 
 	changedHandles := f.handles.Flush()
+	version, versioned := codeVersion(ctx)
 	// The transaction may be retried by the container, so it only reads and writes durable state.
 	// In-memory state (the dirty state) is consumed after it commits.
 	var flags replay.Flags
 	var dirtyEpoch uint64
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
+	f.mustTransact(ctx, func(_ context.Context, tx executiontype.Container) {
 		dirtyEpoch = f.flushDirty(tx, changedHandles)
+		if versioned && f.updateCodeVersion(tx, version) {
+			// new code is a control-flow invalidation too
+			dirtyEpoch++
+			f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
+		}
 		flags = replay.Flags{
 			// an unevaluated invalidation is uncharted territory, so allow the moment order to change
 			PanicOnMomentOrderChange: dirtyEpoch <= f.getEpoch(tx, evaluatedEpochKey),
@@ -208,6 +214,35 @@ func (f *FlowExecution) SettleSequence(ctx context.Context, atIndex int, toEpoch
 			f.setEpoch(tx, evaluatedEpochKey, toEpoch)
 		}
 	})
+}
+
+type codeVersionKey struct{}
+
+// WithCodeVersion attaches the version of the code the flow runs under.
+func WithCodeVersion(ctx context.Context, version string) context.Context {
+	return context.WithValue(ctx, codeVersionKey{}, version)
+}
+
+func codeVersion(ctx context.Context) (string, bool) {
+	version, ok := ctx.Value(codeVersionKey{}).(string)
+	return version, ok
+}
+
+const codeVersionDurableKey = "code_version"
+
+// updateCodeVersion stores version as the one the container runs under, and reports whether it changed.
+func (f *FlowExecution) updateCodeVersion(tx executiontype.Container, version string) (changed bool) {
+	stored, ok, err := tx.LoadDurable(codeVersionDurableKey)
+	if err != nil {
+		panic(err)
+	}
+	if ok && string(stored) == version {
+		return false
+	}
+	if err := tx.StoreDurable(codeVersionDurableKey, []byte(version)); err != nil {
+		panic(err)
+	}
+	return true
 }
 
 func namespacedDurableKeyConstructor(namespace string) func(key string) string {

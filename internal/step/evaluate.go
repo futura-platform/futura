@@ -23,7 +23,7 @@ var (
 	ErrEvaledOutsideOfAFlowFunction = errors.New("steps cannot be evaluated outside of a replay function")
 	ErrNestedStep                   = errors.New("steps cannot be evaluated from inside another step")
 	ErrStepAfterFailure             = errors.New("steps cannot be evaluated after another step failed in the same replay")
-	ErrUnexpectedBranchTaken        = errors.New("unexpected branch taken, new branches should only be triggered by a futura state change")
+	ErrUnexpectedBranchTaken        = errors.New("unexpected branch taken, new branches should only be triggered by a futura state change or a new code version")
 )
 
 func init() {

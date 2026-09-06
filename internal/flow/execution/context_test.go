@@ -253,6 +253,27 @@ func TestWriteBehind_RestartsTheCurrentReplay(t *testing.T) {
 	})
 }
 
+func TestStartNewReplay_CodeVersion(t *testing.T) {
+	t.Run("a changed version bumps the dirty epoch once", func(t *testing.T) {
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
+		start := func(version string) uint64 {
+			replayCtx, epoch := f.StartNewReplay(WithCodeVersion(WithFlow(t.Context(), f), version))
+			replay.Cancel(replayCtx, nil)
+			return epoch
+		}
+		assert.Equal(t, uint64(1), start("1"))
+		assert.Equal(t, uint64(1), start("1"))
+		assert.Equal(t, uint64(2), start("2"))
+		assert.Equal(t, uint64(2), start("2"))
+	})
+	t.Run("no version leaves the dirty epoch alone", func(t *testing.T) {
+		f := running(t, NewFlowExecutionWithContainer(containertest.NewInMemory()))
+		replayCtx, epoch := f.StartNewReplay(WithFlow(t.Context(), f))
+		replay.Cancel(replayCtx, nil)
+		assert.Equal(t, uint64(0), epoch)
+	})
+}
+
 func TestStartNewReplay(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := t.Context()
