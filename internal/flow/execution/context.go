@@ -53,16 +53,16 @@ var ErrTransactionFailed = errors.New("transaction failed")
 // The execution's transactions record what has already happened,
 // so we shouldnt let the context cancel them, since the context can be cancelled by the user code arbitrarily.
 // it must be called with mu held.
-func (f *FlowExecution) mustTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container)) {
-	err := f.c.Transact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.Container) error { fn(ctx, tx); return nil })
+func (f *FlowExecution) mustTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.Container) error) {
+	err := f.c.Transact(context.WithoutCancel(ctx), fn)
 	if err != nil {
 		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
 	}
 }
 
 // mustReadTransact is a read only version of mustTransact.
-func (f *FlowExecution) mustReadTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.ReadOnlyContainer)) {
-	err := f.c.ReadTransact(context.WithoutCancel(ctx), func(ctx context.Context, tx executiontype.ReadOnlyContainer) error { fn(ctx, tx); return nil })
+func (f *FlowExecution) mustReadTransact(ctx context.Context, fn func(ctx context.Context, tx executiontype.ReadOnlyContainer) error) {
+	err := f.c.ReadTransact(context.WithoutCancel(ctx), fn)
 	if err != nil {
 		panic(fmt.Errorf("%w: %w", ErrTransactionFailed, err))
 	}
@@ -112,29 +112,27 @@ var (
 	evaluatedEpochKey                  = sequenceEpochDurableKeyConstructor("evaluated")
 )
 
-func (f *FlowExecution) getEpoch(tx executiontype.Container, key string) uint64 {
+func (f *FlowExecution) getEpoch(tx executiontype.Container, key string) (uint64, error) {
 	encoded, ok, err := tx.LoadDurable(key)
 	if err != nil {
-		panic(err)
+		return 0, err
 	}
 	var epoch uint64
 	if ok {
 		if _, err := binary.Decode(encoded, binary.LittleEndian, &epoch); err != nil {
-			panic(err)
+			// a stored epoch that does not decode is corrupt state, not a transient failure
+			panic(ftrerrors.InconsistentStateError(err))
 		}
 	}
 
-	return epoch
+	return epoch, nil
 }
-func (f *FlowExecution) setEpoch(tx executiontype.Container, key string, epoch uint64) {
+func (f *FlowExecution) setEpoch(tx executiontype.Container, key string, epoch uint64) error {
 	encoded, err := binary.Append(nil, binary.LittleEndian, epoch)
 	if err != nil {
 		panic(err)
 	}
-	err = tx.StoreDurable(key, encoded)
-	if err != nil {
-		panic(err)
-	}
+	return tx.StoreDurable(key, encoded)
 }
 
 // StartNewReplay begins a replay. Any pending invalidation is committed first
@@ -148,17 +146,33 @@ func (f *FlowExecution) StartNewReplay(ctx context.Context) (context.Context, ui
 	// In-memory state (the dirty state) is consumed after it commits.
 	var flags replay.Flags
 	var dirtyEpoch uint64
-	f.mustTransact(ctx, func(_ context.Context, tx executiontype.Container) {
-		dirtyEpoch = f.flushDirty(tx, changedHandles)
-		if versioned && f.updateCodeVersion(tx, version) {
-			// new code is a control-flow invalidation too
-			dirtyEpoch++
-			f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
+	f.mustTransact(ctx, func(_ context.Context, tx executiontype.Container) error {
+		var err error
+		if dirtyEpoch, err = f.flushDirty(tx, changedHandles); err != nil {
+			return err
+		}
+		if versioned {
+			changed, err := f.updateCodeVersion(tx, version)
+			if err != nil {
+				return err
+			}
+			if changed {
+				// new code is a control-flow invalidation too
+				dirtyEpoch++
+				if err := f.setEpoch(tx, dirtyEpochKey, dirtyEpoch); err != nil {
+					return err
+				}
+			}
+		}
+		evaluatedEpoch, err := f.getEpoch(tx, evaluatedEpochKey)
+		if err != nil {
+			return err
 		}
 		flags = replay.Flags{
 			// an unevaluated invalidation is uncharted territory, so allow the moment order to change
-			PanicOnMomentOrderChange: dirtyEpoch <= f.getEpoch(tx, evaluatedEpochKey),
+			PanicOnMomentOrderChange: dirtyEpoch <= evaluatedEpoch,
 		}
+		return nil
 	})
 	f.dirtyState = nil
 	f.handles.OnCommitted(changedHandles)
@@ -177,20 +191,25 @@ func (f *FlowExecution) Handles() *durable.Handles {
 
 // flushDirty writes the dirty state and the changed handle values into tx. Only the dirty state is a
 // control-flow invalidation, so only it bumps the dirty epoch.
-func (f *FlowExecution) flushDirty(tx executiontype.Container, changedHandles map[string][]byte) uint64 {
-	dirtyEpoch := f.getEpoch(tx, dirtyEpochKey)
+func (f *FlowExecution) flushDirty(tx executiontype.Container, changedHandles map[string][]byte) (uint64, error) {
+	dirtyEpoch, err := f.getEpoch(tx, dirtyEpochKey)
+	if err != nil {
+		return 0, err
+	}
 	if len(f.dirtyState) > 0 {
 		dirtyEpoch++
-		f.setEpoch(tx, dirtyEpochKey, dirtyEpoch)
+		if err := f.setEpoch(tx, dirtyEpochKey, dirtyEpoch); err != nil {
+			return 0, err
+		}
 	}
 	for _, values := range []map[string][]byte{f.dirtyState, changedHandles} {
 		for key, value := range values {
 			if err := tx.StoreDurable(GenericDurableKey(key), value); err != nil {
-				panic(err)
+				return 0, err
 			}
 		}
 	}
-	return dirtyEpoch
+	return dirtyEpoch, nil
 }
 
 var (
@@ -201,8 +220,11 @@ var (
 func (f *FlowExecution) SettleSequence(ctx context.Context, atIndex int, toEpoch uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) {
-		stored := f.getEpoch(tx, evaluatedEpochKey)
+	f.mustTransact(ctx, func(ctx context.Context, tx executiontype.Container) error {
+		stored, err := f.getEpoch(tx, evaluatedEpochKey)
+		if err != nil {
+			return err
+		}
 		if stored > toEpoch {
 			panic(ftrerrors.InconsistentStateError(fmt.Errorf("%w: stored %d, settling to %d", ErrEpochRegression, stored, toEpoch)))
 		}
@@ -211,8 +233,9 @@ func (f *FlowExecution) SettleSequence(ctx context.Context, atIndex int, toEpoch
 		}
 		tx.TruncateCallOrderAt(atIndex)
 		if stored != toEpoch {
-			f.setEpoch(tx, evaluatedEpochKey, toEpoch)
+			return f.setEpoch(tx, evaluatedEpochKey, toEpoch)
 		}
+		return nil
 	})
 }
 
@@ -231,18 +254,15 @@ func codeVersion(ctx context.Context) (string, bool) {
 const codeVersionDurableKey = "code_version"
 
 // updateCodeVersion stores version as the one the container runs under, and reports whether it changed.
-func (f *FlowExecution) updateCodeVersion(tx executiontype.Container, version string) (changed bool) {
+func (f *FlowExecution) updateCodeVersion(tx executiontype.Container, version string) (changed bool, err error) {
 	stored, ok, err := tx.LoadDurable(codeVersionDurableKey)
 	if err != nil {
-		panic(err)
+		return false, err
 	}
 	if ok && string(stored) == version {
-		return false
+		return false, nil
 	}
-	if err := tx.StoreDurable(codeVersionDurableKey, []byte(version)); err != nil {
-		panic(err)
-	}
-	return true
+	return true, tx.StoreDurable(codeVersionDurableKey, []byte(version))
 }
 
 func namespacedDurableKeyConstructor(namespace string) func(key string) string {
@@ -271,18 +291,16 @@ func (f *FlowExecution) WriteBehind(ctx context.Context, durableKey string, valu
 func (f *FlowExecution) ReadBehind(ctx context.Context, durableKey string) ([]byte, bool) {
 	var state []byte
 	var ok bool
-	var err error
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
+	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error {
 		if state, ok = f.dirtyState[durableKey]; ok {
-			return
+			return nil
 		}
+		var err error
 		state, ok, err = loadDurable(tx, durableKey)
+		return err
 	})
-	if err != nil {
-		panic(err)
-	}
 	return state, ok
 }
 
@@ -296,7 +314,7 @@ func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.I
 	i := sequence.GetIndex(ctx)
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
+	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error {
 		size := tx.CallOrderLength()
 		if i > size {
 			panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
@@ -305,10 +323,11 @@ func (f *FlowExecution) ExpectedIdentity(ctx context.Context) (identity moment.I
 			}))
 		} else if i == size {
 			identity, ok = moment.Identity{}, false
-			return
+			return nil
 		}
 
 		identity, ok = tx.CallOrderAt(i), true
+		return nil
 	})
 	return identity, ok
 }
@@ -318,8 +337,9 @@ func (f *FlowExecution) GetMoment(ctx context.Context, identity moment.Identity)
 	var ok bool
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
+	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error {
 		moment, ok = tx.GetMoment(identity)
+		return nil
 	})
 	return moment, ok
 }
@@ -334,7 +354,7 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 	defer f.mu.Unlock()
 	changedHandles := f.handles.Flush()
 	i := sequence.GetIndex(ctx)
-	f.mustTransact(ctx, func(_ context.Context, tx executiontype.Container) {
+	f.mustTransact(ctx, func(_ context.Context, tx executiontype.Container) error {
 		size := tx.CallOrderLength()
 		if i > size {
 			panic(ftrerrors.InconsistentStateError(SequenceIndexOutOfBoundsError{
@@ -347,7 +367,8 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 			tx.SetCallOrderAt(i, identity)
 		}
 		tx.SetMoment(identity, currentMoment)
-		f.flushDirty(tx, changedHandles)
+		_, err := f.flushDirty(tx, changedHandles)
+		return err
 	})
 	f.dirtyState = nil
 	f.handles.OnCommitted(changedHandles)
@@ -357,15 +378,13 @@ func (f *FlowExecution) RecordCurrentMoment(ctx context.Context, identity moment
 func (f *FlowExecution) LoadDurable(ctx context.Context, durableKey string) ([]byte, bool) {
 	var state []byte
 	var ok bool
-	var err error
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) {
+	f.mustReadTransact(ctx, func(ctx context.Context, tx executiontype.ReadOnlyContainer) error {
+		var err error
 		state, ok, err = loadDurable(tx, durableKey)
+		return err
 	})
-	if err != nil {
-		panic(err)
-	}
 	return state, ok
 }
 

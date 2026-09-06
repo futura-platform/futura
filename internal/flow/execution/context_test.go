@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"iter"
+	"sync/atomic"
 	"testing"
 
 	"github.com/futura-platform/futura/ftype/executiontype"
@@ -286,6 +288,130 @@ func TestStartNewReplay(t *testing.T) {
 		f := running(t, NewFlowExecutionWithContainer(rejectingContainer{executiontype.NewInMemoryContainer()}))
 		testutil.PanicsWithErrorIs(t, ErrTransactionFailed, func() { f.StartNewReplay(WithFlow(t.Context(), f)) })
 		assert.Nil(t, f.cancelCurrentReplay)
+	})
+}
+
+func TestLoadDurable_RetriesThroughTheContainer(t *testing.T) {
+	t.Run("a read error is returned to the container so it can retry", func(t *testing.T) {
+		c := &flakyDurableContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failures: 2}
+		f := running(t, NewFlowExecutionWithContainer(c))
+		ctx := WithFlow(t.Context(), f)
+		f.WriteBehind(ctx, "key", []byte{1})
+		f.StartNewReplay(ctx)
+		// the boundary above consumed the first two failures itself; arm the read under test
+		c.failures = 2
+		c.attempts.Store(0)
+
+		value, ok := f.LoadDurable(ctx, "key")
+		assert.True(t, ok)
+		assert.Equal(t, []byte{1}, value)
+		assert.Equal(t, int32(3), c.attempts.Load(), "the container retried the read twice before it succeeded")
+
+		c.failures = 2
+		c.attempts.Store(0)
+		value, ok = f.ReadBehind(ctx, "key")
+		assert.True(t, ok)
+		assert.Equal(t, []byte{1}, value)
+		assert.Equal(t, int32(3), c.attempts.Load())
+	})
+	t.Run("a container that gives up surfaces the transaction failure", func(t *testing.T) {
+		c := &flakyDurableContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failures: 100}
+		f := running(t, NewFlowExecutionWithContainer(c))
+		ctx := WithFlow(t.Context(), f)
+		testutil.PanicsWithErrorIs(t, ErrTransactionFailed, func() { f.LoadDurable(ctx, "key") })
+	})
+}
+
+// flakyDurableContainer is a backend whose durable reads and writes fail transiently: a
+// transaction is retried only if the closure returns the error. A panic inside the closure is
+// not caught, so a helper that panics on a transient error fails the test instead of being
+// retried.
+type flakyDurableContainer struct {
+	*executiontype.InMemoryContainer
+	failures      int
+	writeFailures int
+	attempts      atomic.Int32
+}
+
+var errFlakyRead = errors.New("request for future version")
+
+func (c *flakyDurableContainer) retry(fn func() error) error {
+	for range 3 {
+		c.attempts.Add(1)
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errFlakyRead) {
+			return err
+		}
+	}
+	return errFlakyRead
+}
+
+func (c *flakyDurableContainer) ReadTransact(ctx context.Context, fn func(context.Context, executiontype.ReadOnlyContainer) error) error {
+	return c.retry(func() error { return fn(ctx, flakyTx{c}) })
+}
+
+func (c *flakyDurableContainer) Transact(ctx context.Context, fn func(context.Context, executiontype.Container) error) error {
+	return c.retry(func() error { return fn(ctx, flakyTx{c}) })
+}
+
+type flakyTx struct{ c *flakyDurableContainer }
+
+func (r flakyTx) CallOrderLength() int                               { return r.c.CallOrderLength() }
+func (r flakyTx) CallOrderAt(i int) moment.Identity                  { return r.c.CallOrderAt(i) }
+func (r flakyTx) HasMoment(id moment.Identity) bool                  { return r.c.HasMoment(id) }
+func (r flakyTx) GetMoment(id moment.Identity) (moment.Moment, bool) { return r.c.GetMoment(id) }
+func (r flakyTx) KnownMoments() iter.Seq[moment.Identity]            { return r.c.KnownMoments() }
+func (r flakyTx) SetCallOrderAt(i int, id moment.Identity)           { r.c.SetCallOrderAt(i, id) }
+func (r flakyTx) AppendCallOrder(id moment.Identity)                 { r.c.AppendCallOrder(id) }
+func (r flakyTx) TruncateCallOrderAt(i int)                          { r.c.TruncateCallOrderAt(i) }
+func (r flakyTx) SetMoment(id moment.Identity, m moment.Moment)      { r.c.SetMoment(id, m) }
+func (r flakyTx) DeleteMoment(id moment.Identity)                    { r.c.DeleteMoment(id) }
+func (r flakyTx) LoadDurable(key string) ([]byte, bool, error) {
+	if r.c.failures > 0 {
+		r.c.failures--
+		return nil, false, errFlakyRead
+	}
+	return r.c.LoadDurable(key)
+}
+func (r flakyTx) StoreDurable(key string, value []byte) error {
+	if r.c.writeFailures > 0 {
+		r.c.writeFailures--
+		return errFlakyRead
+	}
+	return r.c.StoreDurable(key, value)
+}
+
+func TestBoundaries_RetryThroughTheContainer(t *testing.T) {
+	t.Run("a durable read inside a boundary is returned to the container so it can retry", func(t *testing.T) {
+		// StartNewReplay reads the epochs (getEpoch) and the code version before it writes
+		c := &flakyDurableContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failures: 2}
+		f := running(t, NewFlowExecutionWithContainer(c))
+		ctx := WithCodeVersion(WithFlow(t.Context(), f), "v1")
+		replayCtx, epoch := f.StartNewReplay(ctx)
+		replay.Cancel(replayCtx, nil)
+		assert.Equal(t, uint64(1), epoch, "the version bump landed once the read succeeded")
+		assert.Equal(t, int32(3), c.attempts.Load(), "the container retried the boundary twice before it succeeded")
+	})
+	t.Run("a durable write inside a boundary is returned to the container so it can retry", func(t *testing.T) {
+		c := &flakyDurableContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), writeFailures: 2}
+		f := running(t, NewFlowExecutionWithContainer(c))
+		ctx := WithFlow(t.Context(), f)
+		f.WriteBehind(ctx, "key", []byte{1})
+		replayCtx, _ := f.StartNewReplay(ctx)
+		replay.Cancel(replayCtx, nil)
+		assert.Equal(t, int32(3), c.attempts.Load())
+		value, ok := f.LoadDurable(ctx, "key")
+		assert.True(t, ok)
+		assert.Equal(t, []byte{1}, value, "the flush committed on the retry that succeeded")
+	})
+	t.Run("a settle whose read keeps failing surfaces the transaction failure", func(t *testing.T) {
+		c := &flakyDurableContainer{InMemoryContainer: executiontype.NewInMemoryContainer(), failures: 100}
+		f := running(t, NewFlowExecutionWithContainer(c))
+		ctx := WithFlow(t.Context(), f)
+		testutil.PanicsWithErrorIs(t, ErrTransactionFailed, func() { f.SettleSequence(ctx, -1, 0) })
 	})
 }
 
